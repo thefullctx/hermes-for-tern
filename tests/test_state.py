@@ -172,11 +172,15 @@ def test_reasoning_streams_into_a_thought_that_settles_when_the_answer_starts():
     assert state.rows[-1].kind == "assistant"
 
 
-def test_a_finished_reasoning_block_becomes_a_settled_thought():
+def test_reasoning_available_is_ignored_because_hermes_fills_it_with_the_reply():
     state = Conversation()
     state.begin("why?")
-    state.event("reasoning.available", {"text": "All at once."})
-    assert state.rows[-1].kind == "thought" and state.rows[-1].ended is not None
+    state.event("reasoning.delta", {"text": "Real thinking."})
+    state.event("message.delta", {"text": "The answer."})
+    state.event("reasoning.available", {"text": "The answer."})
+    state.event("message.complete", {"text": "The answer."})
+    assert [row.kind for row in state.rows] == ["user", "thought", "assistant", "delivered"]
+    assert state.rows[1].text == "Real thinking."
 
 
 def todos(*statuses):
@@ -215,5 +219,5 @@ def test_late_reasoning_is_placed_above_the_reply_it_belongs_to():
     state.event("message.delta", {"text": " continues."})
     assert [row.text for row in state.rows if row.kind == "assistant"] == ["The answer continues."]
     state.event("tool.start", {"tool_id": "t", "name": "terminal", "args": {}})
-    state.event("reasoning.available", {"text": "After a tool."})
+    state.event("reasoning.delta", {"text": "After a tool."})
     assert [row.kind for row in state.rows] == ["user", "thought", "assistant", "tool", "thought"]

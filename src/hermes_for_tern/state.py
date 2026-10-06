@@ -248,7 +248,7 @@ class Conversation:
             self._thought.ended = now
             self._thought = None
 
-    def think(self, text: str, whole: bool) -> None:
+    def think(self, text: str) -> None:
         if not text:
             return
         if self._thought is None:
@@ -262,8 +262,6 @@ class Conversation:
                 self.rows.insert(self.rows.index(reply), self._thought)
         self._thought.text += text
         self.activity = "Thinking"
-        if whole:
-            self.settle()
 
     def errands(self, payload: dict) -> None:
         revision = int(payload.get("revision") or 0)
@@ -277,11 +275,21 @@ class Conversation:
             self._errands.items = [dict(t) for t in self.todos]
 
     def event(self, kind: str, payload: dict) -> None:
-        if kind in ("reasoning.delta", "reasoning.available"):
-            self.think(str(payload.get("text", "")), whole=kind == "reasoning.available")
+        if kind == "reasoning.delta":
+            self.think(str(payload.get("text", "")))
             self.touch()
             return
-        if kind not in ("session.usage", "status.update", "todo.updated", "notification.show"):
+        if kind == "reasoning.available":
+            # Despite its name, Hermes relays the reply's own text here (a preview for other
+            # displays), so it would repeat the answer as a thought; real reasoning streams as deltas.
+            return
+        if kind not in (
+            "session.usage",
+            "status.update",
+            "todo.updated",
+            "notification.show",
+            "thinking.delta",
+        ):
             self.settle()
         if kind == "session.info":
             self.info.update(payload)
