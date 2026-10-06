@@ -9,6 +9,10 @@
   --hft-gold-line: light-dark(#805c2040, #d5b47540);
   --hft-quote: light-dark(#9a6b12, #e0c48a);
   --hft-ink: light-dark(#292722, #ece8df);
+  /* who is speaking: your words in matte silver, Hermes's replies in matte gold */
+  --hft-you: light-dark(#474c55, #d3d6db);
+  --hft-prose: light-dark(#6a5126, #d7c49c);
+  --hft-prose-strong: light-dark(#5a3f0e, #ecd29b);
   --hft-muted: light-dark(#686359, #aaa397);
   --hft-faint: light-dark(#8f897d, #77716a);
   --hft-line: light-dark(#ded8cc, #3a3833);
@@ -49,20 +53,21 @@
   content: '❯'; position: absolute; left: calc(12px - var(--hft-gut)); top: 6px;
   width: calc(2 * var(--hft-cw)); text-align: center; line-height: var(--hft-lh); color: var(--hft-gold);
 }
-.sf.sf-card[data-role='message-user'] .sf-text { color: var(--hft-ink); line-height: var(--hft-lh); }
+.sf.sf-card[data-role='message-user'] .sf-text { color: var(--hft-you); line-height: var(--hft-lh); }
 
 /* ---------- Hermes: prose in the one face; color is the only hierarchy */
 .sf.sf-card[data-role='message-assistant'] { padding: 0; border: 0; border-radius: 0; background: none; }
 .sf.sf-card[data-role='message-assistant'] > .sf-card-body { padding: 0; }
-[data-role='message-assistant'] .sf-md .md { color: var(--hft-ink); line-height: var(--hft-lh); }
-[data-role='message-assistant'] .sf-md .md strong { color: var(--hft-ink); }
+[data-role='message-assistant'] .sf-md .md { color: var(--hft-prose); line-height: var(--hft-lh); }
+.sf.sf-card[data-role='message-assistant'] .sf-md .md :is(p, li, .li-t, blockquote, td, th) { color: var(--hft-prose); }
+[data-role='message-assistant'] .sf-md .md strong { color: var(--hft-prose-strong); }
 [data-role='message-assistant'] .sf-md .md :not(pre) > code {
-  padding: 0; border-radius: 0; background: none; box-shadow: none; font: inherit; color: var(--hft-quote); }
+  padding: 0; border-radius: 0; background: none; box-shadow: none; font: inherit; color: var(--hft-ink); }
 /* headings: body size in gold, led by a quiet ## marker (Tern's own heading styles outrank a
    plain selector, so these carry the card's classes) */
 .sf.sf-card[data-role='message-assistant'] .sf-md .md :is(h1, h2, h3, h4) {
   margin: calc(0.5 * var(--hft-lh)) 0 calc(0.25 * var(--hft-lh)); font-family: inherit; font-size: 1em;
-  font-weight: 600; line-height: var(--hft-lh); letter-spacing: 0; color: var(--hft-gold); }
+  font-weight: 600; line-height: var(--hft-lh); letter-spacing: 0; color: var(--hft-prose-strong); }
 .sf.sf-card[data-role='message-assistant'] .sf-md .md :is(h1, h2, h3, h4)::before {
   font-weight: 400; color: var(--hft-faint); }
 .sf.sf-card[data-role='message-assistant'] .sf-md .md h1::before { content: '# '; }
@@ -487,7 +492,7 @@
 @keyframes hft-caret { 0%, 100% { opacity: 0.85; } 50% { opacity: 0.2; } }
 [data-role='message-assistant'] .sf-md .md .sf-t-dim { color: var(--hft-gold); opacity: 0.4; }
 [data-role='message-assistant'] .sf-md .md .sf-t-accent { color: var(--hft-gold); }
-[data-role='message-assistant'] .sf-md .md .sf-t-muted { color: color-mix(in srgb, var(--hft-gold) 45%, var(--hft-ink)); }
+[data-role='message-assistant'] .sf-md .md .sf-t-muted { color: color-mix(in srgb, var(--hft-gold) 55%, var(--hft-prose)); }
 
 /* running: the ● breathes and the leader's dots march toward the clock */
 .sf.sf-tool[data-role='tool'].st-running .sf-tool-ic::before { animation: hft-breathe 1200ms ease-in-out infinite; }

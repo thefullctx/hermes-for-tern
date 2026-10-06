@@ -65,7 +65,8 @@ one monospace face on the pane's cell grid and a three-cell gutter that carries 
 (`❯` you, `●` a tool tinted by its status, `✗` an error). Tools have no frame: a title, its
 target and a dotted leader to the time, with output behind a one-pixel guide and `└─` for
 folded lines. Color is the only hierarchy, and Hermes's color is muted gold, on graphite in dark
-mode and warm ivory in light mode. The composer is one prompt line in a hairline box, above a
+mode and warm ivory in light mode. Your words are matte silver and Hermes's replies matte gold,
+so who is speaking reads at a glance. The composer is one prompt line in a hairline box, above a
 flat status strip with the model, project, usage and the send or stop key.
 
 The startup screen is centered above the composer, with a staged logo/title/details entrance,
