@@ -53,13 +53,15 @@ class Clock:
         return self.now
 
 
-def bursts(text: str, start: float, rate: float = 70.0) -> list[tuple[float, str, dict]]:
+def bursts(
+    text: str, start: float, rate: float = 70.0, kind: str = "message.delta"
+) -> list[tuple[float, str, dict]]:
     """Deltas the way models send them: uneven chunks at uneven intervals."""
     events, at, i, n = [], start, 0, 0
     while i < len(text):
         size = (18, 7, 31, 12, 44, 9, 26)[n % 7]
         chunk = text[i : i + size]
-        events.append((at, "message.delta", {"text": chunk}))
+        events.append((at, kind, {"text": chunk}))
         at += len(chunk) / rate * (0.6, 1.5, 0.8, 1.2)[n % 4]
         i, n = i + size, n + 1
     return events
@@ -82,7 +84,43 @@ FINAL = (
 )
 
 
+THOUGHT = (
+    "CI fails but local runs pass, so something depends on timing or environment. "
+    "Start with the test configuration, then run the suite and read the failure."
+)
+SECOND_THOUGHT = "A fixed 50 ms wait is fragile on slow runners; the test should wait on the reply itself."
+ERRANDS = ["Read the test configuration", "Run the test suite", "Find the failing test", "Fix it and verify"]
+
+
+def errands(done: int, revision: int) -> tuple[str, dict]:
+    todos = [
+        {
+            "id": str(i),
+            "content": c,
+            "status": "completed" if i < done else "in_progress" if i == done else "pending",
+        }
+        for i, c in enumerate(ERRANDS)
+    ]
+    return "todo.updated", {"todos": todos, "revision": revision}
+
+
 def timeline() -> list[tuple[float, str, dict]]:
+    """The turn: a thought, errands, tools that fail and pass, subagents and the fix."""
+    work = [(at + 1.6, kind, payload) for at, kind, payload in steps()]
+    extra = bursts(THOUGHT, 0.4, rate=220.0, kind="reasoning.delta")
+    extra += bursts(SECOND_THOUGHT, 8.02, rate=220.0, kind="reasoning.delta")
+    extra += [
+        (at, *errands(done, revision))
+        for revision, (at, done) in enumerate([(2.9, 0), (5.5, 1), (8.0, 2), (11.0, 3), (18.4, 4)], 1)
+    ]
+    extra += [
+        (at, "session.usage", {"usage": {"total": tokens, "context_percent": pct}})
+        for at, pct, tokens in [(2.0, 8, 2100), (6.0, 12, 4800), (11.5, 16, 8200), (17.0, 21, 11600)]
+    ]
+    return sorted(work + extra, key=lambda event: event[0])
+
+
+def steps() -> list[tuple[float, str, dict]]:
     events: list[tuple[float, str, dict]] = [(0.8, "message.start", {})]
     events += bursts(INTRO, 1.0)
     events += [
@@ -195,7 +233,13 @@ def timeline() -> list[tuple[float, str, dict]]:
     ]
     events += bursts(FINAL, 17.0, rate=110.0)
     end = events[-1][0] + 0.4
-    events.append((end, "message.complete", {"text": FINAL, "status": "complete", "usage": {"total": 12480}}))
+    events.append(
+        (
+            end,
+            "message.complete",
+            {"text": FINAL, "status": "complete", "usage": {"total": 12480, "context_percent": 22}},
+        )
+    )
     return events
 
 

@@ -135,6 +135,11 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Native conversation UI with streamed Markdown and code blocks.
 - Multi-turn conversations using the real Hermes backend and existing tools.
 - Native tool rows with folded output, duration, outcome and optional diffs.
+- Reasoning as a thought in faint gold ink that fades and folds to `◇ pondered for 6s` when the answer
+  starts (Hermes sends reasoning when its `display.show_reasoning` setting is on).
+- Hermes's todo list as the turn's errands: one row whose items dry from gold as they are done, and a
+  pill above the composer whose gold ring fills and seals when all are delivered.
+- Context use as a gold hairline on the composer's top edge, amber from 80% and red from 95%.
 - Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
   tokens, time and a one-line summary, with grandchildren nested under their parent.
 - Composer typing, multiline paste, Unicode, native selection and basic undo.
@@ -231,15 +236,21 @@ Linux and other Hermes installation methods are unverified.
 
 ```sh
 uv run pytest -q
-uv run ruff check src tests
-uv run ruff format --check src tests
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 34 tests covering streaming/interim/final message ordering, paced
-streaming and its fading ink, tool failure/interruption, subagent lifecycles and nesting, delivered
+The current suite contains 39 tests covering streaming/interim/final message ordering, paced
+streaming and its fading ink, thoughts, errands and the context line, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns, Unicode edits, server-request answers, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome; every change is reviewed before it is merged.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and the interface's house rules, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License and attribution
 

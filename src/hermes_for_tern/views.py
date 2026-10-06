@@ -81,7 +81,79 @@ def delegation(row: Row):
     )
 
 
+# Errand glyphs by Hermes's todo status.
+ERRAND = {"completed": "✓", "in_progress": "◆", "pending": "·", "cancelled": "–"}
+GLYPH_TONE = {"completed": "success", "in_progress": "accent", "pending": "dim", "cancelled": "dim"}
+
+
+def took(seconds: float) -> str:
+    return f"{max(1, round(seconds))}s" if seconds < 60 else f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
+
+
+def progress(items: list[dict]) -> tuple[int, int, str]:
+    """Done and total errands (cancelled ones drop out) and the one under way."""
+    live = [i for i in items if i.get("status") != "cancelled"]
+    done = sum(i.get("status") == "completed" for i in live)
+    current = next((i for i in live if i.get("status") == "in_progress"), None) or next(
+        (i for i in live if i.get("status") == "pending"), None
+    )
+    return done, len(live), str(current.get("content", "")) if current else ""
+
+
+def thought(row: Row, state: Conversation):
+    """Reasoning in faint gold ink; when the answer starts it fades, then folds to one line."""
+    live = row.ended is None
+    folding = row.folding(time.monotonic())
+    if live:
+        head = [ui.span("◇ ", "accent"), ui.span("pondering…", fx="shimmer")]
+    else:
+        head = [ui.span("◇ ", "accent"), ui.span(f"pondered for {took(row.duration or 0)}", "muted")]
+    return ui.section(
+        ui.md(row.visible, stream=live, key="body"),
+        head=head,
+        collapsible=not live,
+        collapsed=False if live or folding else row.collapsed,
+        role="thought-live" if live else "thought-folding" if folding else "thought",
+        key=row.key,
+        on_toggle=lambda e: fold(row, state, e.collapsed),
+    )
+
+
+def errand_list(row: Row):
+    done, total, _ = progress(row.items)
+    lines = [
+        ui.text(
+            [
+                ui.span(
+                    ERRAND.get(str(item.get("status")), "·") + " ", GLYPH_TONE.get(str(item.get("status")))
+                ),
+                ui.span(
+                    str(item.get("content", "")),
+                    fx="shimmer" if item.get("status") == "in_progress" else None,
+                ),
+            ],
+            role=f"errand-{item.get('status', 'pending')}",
+            key=f"e{index}",
+        )
+        for index, item in enumerate(row.items)
+    ]
+    return ui.tool(
+        ui.col(*lines, role="errands", key="items"),
+        name="errands",
+        title="Errands",
+        target=f"{done}/{total}",
+        status="done" if total and done == total else "running",
+        collapsible=False,
+        key=row.key,
+        role="tool",
+    )
+
+
 def transcript_row(row: Row, state: Conversation):
+    if row.kind == "thought":
+        return thought(row, state)
+    if row.kind == "errands":
+        return errand_list(row)
     if row.kind == "tool":
         body = (
             ui.diff(row.diff, key="diff") if row.diff else ui.code(row.text[:48000], wrap=True, key="output")
@@ -209,8 +281,24 @@ def brand_image(assets: dict[str, str], name: str, size: int, *, key: str, role:
     return ui.icon("sparkle", tone="accent", key=key, role=role)
 
 
+def errand_pill(todos: list[dict]):
+    """The turn's errands as a pill: a gold ring that fills as they are done."""
+    done, total, current = progress(todos)
+    if not total:
+        return None
+    finished = done == total
+    return ui.row(
+        ui.meter(done / total, style="ring", size="sm", key="ring"),
+        ui.text([ui.span("errands ", "muted"), ui.span(f"{done}/{total}")], key="count"),
+        ui.text("all delivered" if finished else current[:60], key="now"),
+        gap="sm",
+        role="errands-done" if finished else "errands",
+        key="errands",
+    )
+
+
 def working(state: Conversation, label: str):
-    """One console line: a spinner, what Hermes is doing, and how long the turn has run."""
+    """One console line: a spinner, what Hermes is doing, how long the turn has run, its errands."""
     waiting = bool(state.questions)
     started = state.turn_started or time.monotonic()
     return ui.row(
@@ -219,6 +307,7 @@ def working(state: Conversation, label: str):
         else ui.spinner(style="braille", key="mark"),
         ui.text(label, key="label") if waiting else ui.shimmer(label, key="label"),
         ui.elapsed(max(0, (time.monotonic() - started) * 1000), key="clock"),
+        errand_pill(state.todos) if state.busy else None,
         gap="sm",
         role="activity",
         key="working",
@@ -243,7 +332,7 @@ def view(
     # Each turn is its own column, so a gold thread can run down its gutter.
     turns: list[tuple[str, list]] = []
     for row in state.rows:
-        if row.visible or row.kind == "tool":
+        if row.visible or row.kind in ("tool", "errands"):
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
             turns[-1][1].append(transcript_row(row, state))
@@ -308,6 +397,13 @@ def view(
             state.activity, state.activity.replace("_", " ")
         )
         dock.append(working(state, "Waiting for your answer" if state.questions else activity))
+    fuel = state.usage.get("context_percent")
+    fuel = fuel if isinstance(fuel, (int, float)) and not isinstance(fuel, bool) else None
+    if fuel is not None:
+        # Context use as a gold hairline on the composer's top edge; amber, then red, as it fills.
+        dock.append(
+            ui.meter(min(1.0, fuel / 100), thresholds={"warn": 0.8, "bad": 0.95}, role="fuel", key="fuel")
+        )
     dock.append(
         ui.editor(
             active_draft.text,
@@ -352,6 +448,9 @@ def view(
             ui.seg(cwd.name, icon="folder", key="project"),
             ui.seg(f"{usage:,} tokens", side="right", key="usage")
             if isinstance(usage, int) and usage
+            else None,
+            ui.seg(f"{fuel:.0f}% context", side="right", role="fuel-seg", key="fuel")
+            if fuel is not None
             else None,
             ui.seg("⇧⏎ newline", side="right", key="newline"),
             action,

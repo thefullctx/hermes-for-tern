@@ -68,3 +68,24 @@ def test_subagents_nest_under_their_parent_inside_the_delegation():
     assert "main.canvas.r1.r2.agents.c" in nodes
     assert nodes["main.canvas.r1.r2"].wire()["p"]["target"] == "3 subagents"
     assert nodes["main.canvas.r1"].wire()["p"]["tone"] == "pending"
+
+
+def test_errand_progress_pill_and_fuel_line():
+    from hermes_for_tern.views import progress
+
+    items = [
+        {"content": "a", "status": "completed"},
+        {"content": "b", "status": "in_progress"},
+        {"content": "c", "status": "cancelled"},
+        {"content": "d", "status": "pending"},
+    ]
+    assert progress(items) == (1, 3, "b")
+    state = Conversation()
+    state.ready = True
+    state.begin("work")
+    state.event("todo.updated", {"todos": items, "revision": 1})
+    state.event("session.usage", {"usage": {"context_percent": 42}})
+    nodes = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop)).nodes()
+    assert nodes["dock.working.errands"].wire()["p"]["role"] == "errands"
+    assert nodes["dock.fuel"].wire()["p"]["value"] == 0.42
+    assert nodes["dock.bar.fuel"].wire()["p"]["text"] == "42% context"
