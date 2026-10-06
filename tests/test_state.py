@@ -1,4 +1,4 @@
-from hermes_for_tern.state import Conversation
+from hermes_for_tern.state import FOLD, Conversation
 
 
 def assistant_texts(state):
@@ -168,7 +168,7 @@ def test_reasoning_streams_into_a_thought_that_settles_when_the_answer_starts():
     assert thought.ended is None
     state.event("message.delta", {"text": "Let me check."})
     assert thought.ended is not None and thought.duration is not None
-    assert thought.folding(thought.ended) and not thought.folding(thought.ended + 5)
+    assert thought.folding(thought.ended) and not thought.folding(thought.ended + FOLD)
     assert state.rows[-1].kind == "assistant"
 
 
@@ -204,3 +204,16 @@ def test_errands_do_not_split_a_streaming_reply():
     state.event("todo.updated", {**todos("pending"), "revision": 1})
     state.event("message.delta", {"text": "second half."})
     assert [row.text for row in state.rows if row.kind == "assistant"] == ["First half, second half."]
+
+
+def test_late_reasoning_is_placed_above_the_reply_it_belongs_to():
+    state = Conversation()
+    state.begin("why?")
+    state.event("message.delta", {"text": "The answer"})
+    state.event("reasoning.delta", {"text": "Thinking that arrived late."})
+    assert [row.kind for row in state.rows] == ["user", "thought", "assistant"]
+    state.event("message.delta", {"text": " continues."})
+    assert [row.text for row in state.rows if row.kind == "assistant"] == ["The answer continues."]
+    state.event("tool.start", {"tool_id": "t", "name": "terminal", "args": {}})
+    state.event("reasoning.available", {"text": "After a tool."})
+    assert [row.kind for row in state.rows] == ["user", "thought", "assistant", "tool", "thought"]

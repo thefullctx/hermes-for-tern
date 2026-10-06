@@ -14,8 +14,8 @@ DRAIN = 0.35
 MIN_RATE = 120.0
 # Newly revealed text is written in gold ink that dries: each FADE age ends one stage.
 FADE = (0.12, 0.32, 0.6)
-# A finished thought stays open this long while it fades, then folds to one line.
-FOLD = 1.4
+# A finished thought stays readable, then fades; after FOLD seconds it folds to one line.
+FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
 QUIET_TOOLS = {"todo"}
 
@@ -252,8 +252,14 @@ class Conversation:
         if not text:
             return
         if self._thought is None:
-            self._assistant = None
             self._thought = self.add("thought", shown=0, began=time.monotonic())
+            # Thinking reads above the output it leads to, even when it arrives during or just
+            # after the reply it belongs to (some providers send reasoning late).
+            last = self.rows[-2] if len(self.rows) > 1 else None
+            reply = self._assistant or (last if self.busy and last and last.kind == "assistant" else None)
+            if reply is not None:
+                self.rows.remove(self._thought)
+                self.rows.insert(self.rows.index(reply), self._thought)
         self._thought.text += text
         self.activity = "Thinking"
         if whole:
