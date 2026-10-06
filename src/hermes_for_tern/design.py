@@ -45,4 +45,7 @@ LIGHT = {
 def send_assets(session) -> dict[str, str]:
     if "image" not in session.caps.kinds or not session.caps.has("blobs"):
         return {}
-    return {"hermes": session.blob(ASSETS.joinpath("hermes.svg").read_bytes(), "image/svg+xml")}
+    return {
+        name: session.blob(ASSETS.joinpath(f"{name}.svg").read_bytes(), "image/svg+xml")
+        for name in ("hermes", "wordmark")
+    }
