@@ -84,6 +84,20 @@ FINAL = (
 )
 
 
+SEARCH = {"pattern": r"timeout=0\.\d+", "target": "content", "path": "tests"}
+FOUND = {
+    "total_count": 3,
+    "matches": [
+        {"path": "tests/test_rpc.py", "line": 41, "content": "    reply = future.result(timeout=0.05)"},
+        {"path": "tests/test_rpc.py", "line": 58, "content": "    backend.wait(timeout=0.05)"},
+        {"path": "tests/test_app.py", "line": 22, "content": "    app.poll(timeout=0.02)"},
+    ],
+}
+FAILURE = (
+    "Rate limited by the provider (429). Too many requests in the last minute.\n"
+    "Details: retry after a few seconds."
+)
+
 THOUGHT = (
     "CI fails but local runs pass, so something depends on timing or environment. "
     "Start with the test configuration, then run the suite and read the failure."
@@ -152,12 +166,8 @@ def steps() -> list[tuple[float, str, dict]]:
     events += bursts(FOLLOW, 6.9)
     events += [
         (8.2, "message.interim", {"text": FOLLOW}),
-        (8.3, "tool.start", {"tool_id": "t3", "name": "read_file", "args": {"path": "tests/test_rpc.py"}}),
-        (
-            9.3,
-            "tool.complete",
-            {"tool_id": "t3", "result": {"output": "def test_timeout(): ..."}, "duration_s": 1.0},
-        ),
+        (8.3, "tool.start", {"tool_id": "t3", "name": "search_files", "args": SEARCH}),
+        (9.3, "tool.complete", {"tool_id": "t3", "result": FOUND, "duration_s": 1.0}),
         (9.6, "tool.start", {"tool_id": "t4", "name": "terminal", "args": {"command": "uv run pytest -q"}}),
         (
             11.6,
@@ -278,7 +288,20 @@ def record(out: Path, script) -> None:
     def frame() -> None:
         nonlocal sent, seq, revision
         built = View.build(
-            view(state, Draft(), Draft(), Path("hermes-for-tern"), noop, noop, noop, noop, noop, noop, assets)
+            view(
+                state,
+                Draft(),
+                Draft(),
+                Path("hermes-for-tern"),
+                noop,
+                noop,
+                noop,
+                noop,
+                noop,
+                noop,
+                assets,
+                noop,
+            )
         )
         ops = sent.ops(built, "s1")
         if ops:
@@ -314,12 +337,25 @@ def startup(state: Conversation, step) -> None:
 
 
 def session(state: Conversation, step) -> None:
+    """A first attempt the provider rate-limits, a retry, then the turn."""
+    prompt = "Why are the tests failing on CI?"
     state.ready = True
     state.info["model"] = MODEL
     step(0.4)
-    state.begin("Why are the tests failing on CI?")
-    events = [(at + 0.4, kind, payload) for at, kind, payload in timeline()]
-    step(events[-1][0] - 0.4 + 2.0, events)
+    state.begin(prompt)
+    surface = {"layer": "provider", "code": "rate_limit", "retryable": True}
+    step(2.6, [(1.4, "message.complete", {"status": "error", "text": FAILURE, "error_surface": surface})])
+    state.begin(prompt)  # what the retry key does
+    events = [(at + 3.0, kind, payload) for at, kind, payload in timeline()]
+    events.append(
+        (
+            17.5,
+            "background.complete",
+            {"task_id": "ci-log", "text": "Fetched the last CI log: 1 failure, 26 passed."},
+        )
+    )
+    events.sort(key=lambda event: event[0])
+    step(events[-1][0] - 3.0 + 2.0, events)
 
 
 def main(folder: Path) -> None:

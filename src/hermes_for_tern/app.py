@@ -7,7 +7,7 @@ import time
 from concurrent.futures import Future
 from pathlib import Path
 
-from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent
+from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent, VisibleEvent
 
 from .editor import Draft
 from .rpc import Backend
@@ -102,6 +102,7 @@ class App:
                 self.suggest,
                 self.submit,
                 self.assets,
+                self.retry,
             )
         )
         if self.backend:
@@ -269,6 +270,13 @@ class App:
         self.state.touch()
         self.surface.focus("dock.composer")
 
+    def retry(self) -> None:
+        """Send the last prompt again after a retryable failure."""
+        if self.state.can_retry:
+            prompt = self.state.last_prompt
+            self.state.begin(prompt)
+            self.request("prompt.submit", self.scoped(text=prompt))
+
     def submit(self, text: str | None = None) -> None:
         question = self.state.clarify()
         if question:
@@ -277,6 +285,9 @@ class App:
                 self.answer_question(question, answer)
             return
         text = self.draft.text if text is None else text
+        if not text.strip() and self.state.can_retry:
+            self.retry()
+            return
         if text.strip() in ("/quit", "/exit"):
             self.exit = True
         elif text.strip() == "/stop":
@@ -324,5 +335,7 @@ class App:
             self.surface.focus("dock.composer")
         elif isinstance(item, ErrorEvent):
             self.state.add("error", f"Tern: {item.msg}")
+        elif isinstance(item, VisibleEvent) and item.visible is not None:
+            self.state.show(item.visible)
         elif isinstance(item, GoneEvent) and self.surface.id in item.ids:
             self.exit = True

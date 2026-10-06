@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Callable
@@ -9,7 +10,7 @@ from typing import Callable
 from tern_sdk import ui
 
 from .editor import Draft
-from .state import Agent, Conversation, Question, Row
+from .state import Agent, Conversation, Dispatch, Question, Row
 
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
@@ -149,7 +150,106 @@ def errand_list(row: Row):
     )
 
 
-def transcript_row(row: Row, state: Conversation):
+def hits(text: str, pattern: re.Pattern | None) -> list:
+    """A line with each match as a mark, which the stylesheet underlines in gold ink."""
+    if pattern is None:
+        return [ui.span(text)]
+    spans, at = [], 0
+    for found in pattern.finditer(text):
+        if found.end() > found.start():
+            spans += [ui.span(text[at : found.start()]), ui.span(found.group(), "mark")]
+            at = found.end()
+    return spans + [ui.span(text[at:])] if spans else [ui.span(text)]
+
+
+def search_tree(row: Row):
+    """search_files results as tree rows: each file once, then its matching lines, matches inked."""
+    result = row.result or {}
+    try:
+        pattern = re.compile(str(row.args.get("pattern", ""))) if row.args.get("target") != "files" else None
+    except re.error:
+        pattern = None
+    files: dict[str, list[tuple[str, str]]] = {}
+    for match in result.get("matches") or []:
+        files.setdefault(str(match.get("path", "")), []).append(
+            (str(match.get("line", "")), str(match.get("content", "")))
+        )
+    path = ""
+    for line in str(result.get("matches_text") or "").splitlines():
+        if line.startswith("  ") and ":" in line:
+            number, _, content = line.strip().partition(": ")
+            files.setdefault(path, []).append((number, content))
+        elif line.strip():
+            path = line.strip()
+            files.setdefault(path, [])
+    for name in result.get("files") or []:
+        files.setdefault(str(name), [])
+    counts = result.get("counts") or {}
+    rows, names = [], list(files) or list(counts)
+    for index, name in enumerate(names):
+        last = index == len(names) - 1
+        count = counts.get(name) or len(files.get(name, [])) or None
+        rows.append(
+            ui.text(
+                [ui.span("└─ " if last else "├─ ", "dim"), ui.span(name, "path")]
+                + ([ui.span(f"  {count}", "dim")] if count else []),
+                role="search-file",
+                key=f"f{index}",
+            )
+        )
+        for hit, (number, content) in enumerate(files.get(name, [])[:20]):
+            rows.append(
+                ui.text(
+                    [ui.span(("   " if last else "│  ") + f"{number:>4}  ", "dim")]
+                    + hits(content.rstrip(), pattern),
+                    role="search-hit",
+                    key=f"f{index}h{hit}",
+                )
+            )
+    return ui.col(*rows, role="search", key="output") if rows else None
+
+
+def undelivered(row: Row, state: Conversation, retry: Callable | None):
+    """A failed turn: what failed, the provider's code when Hermes gives one, and a retry key."""
+    surface = row.result or {}
+    code = str(surface.get("code") or "")
+    status = re.search(r"\b([45]\d\d)\b", row.text)
+    badge = status.group(1) if status else code.replace("_", " ")
+    latest = state.can_retry and row is next((r for r in reversed(state.rows) if r.kind == "error"), None)
+    return ui.card(
+        ui.text(row.text.strip(), key="body"),
+        ui.html.div(button("retry ⏎", retry, primary=True, key="retry"), class_="hft-actions", key="actions")
+        if latest and retry
+        else None,
+        head=[ui.span("Undelivered"), ui.span(f"  {badge}", "dim")] if badge else "Undelivered",
+        variant="bare",
+        role="undelivered",
+        key=row.key,
+    )
+
+
+def dispatches(notes: list[Dispatch]):
+    """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade."""
+    now = time.monotonic()
+    return ui.html.div(
+        *(
+            ui.html.div(
+                ui.html.span("☤", class_="hft-dispatch-mark", key="mark"),
+                ui.html.span("Dispatch", class_="hft-dispatch-title", key="title"),
+                ui.html.span(note.text, class_="hft-dispatch-text", key="text"),
+                ui.html.span(note.sub, class_="hft-dispatch-sub", key="sub") if note.sub else None,
+                class_=f"hft-dispatch tone-{note.tone}" + (" leaving" if note.leaving(now) else ""),
+                key=note.key,
+            )
+            for note in notes
+        ),
+        class_="hft-dispatches",
+        role="dispatches",
+        key="dispatches",
+    )
+
+
+def transcript_row(row: Row, state: Conversation, retry: Callable | None = None):
     if row.kind == "thought":
         return thought(row, state)
     if row.kind == "errands":
@@ -161,6 +261,8 @@ def transcript_row(row: Row, state: Conversation):
         running = row.status == "running"
         if row.agents:
             body = delegation(row)
+        elif row.name == "search_files" and row.result and not running:
+            body = search_tree(row) or body
         elif running:
             # The head carries the live timer; the body speaks only when Hermes waits on you.
             body = ui.text("waiting for your answer", tone="muted", key="output") if state.questions else None
@@ -192,6 +294,8 @@ def transcript_row(row: Row, state: Conversation):
             role="message-assistant",
             key=row.key,
         )
+    if row.kind == "error" and row.name == "turn":
+        return undelivered(row, state, retry)
     if row.kind == "error":
         return ui.card(
             ui.text(row.text, key="body"),
@@ -326,6 +430,7 @@ def view(
     suggest: Callable,
     submit: Callable | None = None,
     assets: dict[str, str] | None = None,
+    retry: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
@@ -335,7 +440,7 @@ def view(
         if row.visible or row.kind in ("tool", "errands"):
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
-            turns[-1][1].append(transcript_row(row, state))
+            turns[-1][1].append(transcript_row(row, state, retry))
     welcome = not turns
     rows: list = []
     if welcome:
@@ -476,8 +581,9 @@ def view(
                 key="canvas",
             )
         ),
-        "layer": ui.col(ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage"))
-        if welcome
-        else None,
+        "layer": ui.col(
+            ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
+            dispatches(state.dispatches) if state.dispatches else None,
+        ),
         "dock": ui.col(*dock, gap="none"),
     }

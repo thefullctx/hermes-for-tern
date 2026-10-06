@@ -3,7 +3,7 @@
    to right-aligned facts, tree rules under results, color as the only hierarchy, all on a
    1040px measure. Gold is Hermes. Program sheets reach only this surface's regions. */
 [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
-[data-role='activity'], [data-role='fuel'] {
+[data-role='activity'], [data-role='fuel'], [data-role='dispatches'] {
   --hft-gold: light-dark(#805c20, #d5b475);
   --hft-gold-wash: light-dark(#805c2012, #d5b47512);
   --hft-gold-line: light-dark(#805c2040, #d5b47540);
@@ -96,18 +96,18 @@
 .sf.sf-text[data-role='notice']::before {
   content: '·'; position: absolute; left: calc(0px - var(--hft-gut)); width: calc(2 * var(--hft-cw));
   text-align: center; color: var(--hft-faint); }
-.sf.sf-card[data-role='error'] {
+.sf.sf-card:is([data-role='error'], [data-role='undelivered']) {
   margin-left: -12px; padding: 0; border: 0; border-radius: 0; overflow: visible;
   background: linear-gradient(90deg, var(--hft-bad-wash), transparent 70%);
   box-shadow: inset 0 1px 0 var(--hft-bad-line), inset 0 -1px 0 var(--hft-bad-line);
 }
-.sf.sf-card[data-role='error']::before {
+.sf.sf-card:is([data-role='error'], [data-role='undelivered'])::before {
   content: '✗'; position: absolute; left: calc(12px - var(--hft-gut)); top: 6px;
   width: calc(2 * var(--hft-cw)); text-align: center; line-height: var(--hft-lh); color: var(--hft-bad); }
-.sf.sf-card[data-role='error'] > .sf-card-head { min-height: var(--hft-lh); padding: 6px 12px 2px; }
-.sf.sf-card[data-role='error'] > .sf-card-head .sf-card-ic { display: none; }
-.sf.sf-card[data-role='error'] > .sf-card-head .sf-head { font-weight: 600; color: var(--hft-bad); }
-.sf.sf-card[data-role='error'] > .sf-card-body { padding: 0 12px 6px; }
+.sf.sf-card:is([data-role='error'], [data-role='undelivered']) > .sf-card-head { min-height: var(--hft-lh); padding: 6px 12px 2px; }
+.sf.sf-card:is([data-role='error'], [data-role='undelivered']) > .sf-card-head .sf-card-ic { display: none; }
+.sf.sf-card:is([data-role='error'], [data-role='undelivered']) > .sf-card-head .sf-head { font-weight: 600; color: var(--hft-bad); }
+.sf.sf-card:is([data-role='error'], [data-role='undelivered']) > .sf-card-body { padding: 0 12px 6px; }
 
 /* ---------- questions: the user's strip in Hermes gold, ! or ? in the gutter */
 .sf.sf-card:is([data-role='approval'], [data-role='clarification']) {
@@ -297,6 +297,50 @@
 .sf.sf-meter[data-role='fuel'][data-level='bad'] .sf-mt-fill { background: var(--hft-bad); opacity: 1; }
 [data-role='bar'] .sf-seg[data-role='fuel-seg'] { color: var(--hft-faint); }
 
+/* ---------- undelivered: a failed turn, its code beside the title, and a gold retry key */
+.sf.sf-card[data-role='undelivered'] > .sf-card-head .sf-t-dim {
+  font-weight: 400; color: color-mix(in srgb, var(--hft-bad) 60%, var(--hft-faint)); }
+.sf.sf-card[data-role='undelivered'] > .sf-card-body { gap: 8px; }
+.sf.sf-card[data-role='undelivered'] .sf-text { white-space: pre-wrap; color: var(--hft-muted); }
+
+/* ---------- search results: a tree of files, their matching lines, and each match underlined in
+   gold ink that draws itself left to right */
+.sf.sf-tool[data-role='tool'] > .sf-tool-body > [data-role='search'] {
+  margin-left: 0; padding-left: 0; box-shadow: none; gap: 0; }
+[data-role='search'] .sf-text {
+  font-family: var(--hft-mono); line-height: var(--hft-lh); white-space: pre; overflow: hidden;
+  text-overflow: ellipsis; color: var(--hft-muted); }
+[data-role='search'] .sf-t-dim { color: var(--hft-faint); }
+.sf.sf-text[data-role='search-file'] .sf-t-path { color: var(--hft-ink); }
+.sf.sf-text[data-role='search-hit'] .sf-t-mark {
+  border-radius: 0; background-color: transparent; color: var(--hft-gold);
+  background-image: linear-gradient(var(--hft-gold), var(--hft-gold)); background-repeat: no-repeat;
+  background-position: 0% 100%; background-size: 100% 1px;
+  animation: hft-ink-line 900ms var(--hft-out) 250ms both; }
+@keyframes hft-ink-line { from { background-size: 0% 1px; } to { background-size: 100% 1px; } }
+
+/* ---------- dispatches: short notes above the composer that rise in and fade away */
+.sf.sf-el.hft-dispatches {
+  position: absolute; left: 0; right: 0; bottom: 136px; z-index: 5; display: flex;
+  flex-direction: column; align-items: center; gap: 6px; padding: 0 16px; pointer-events: none; }
+.sf.sf-el.hft-dispatch {
+  display: flex; align-items: baseline; gap: 8px; max-width: 640px; padding: 7px 14px;
+  border-radius: 8px; background: light-dark(#fffdf8f2, #1f1e1bf2);
+  box-shadow: inset 0 0 0 1px var(--hft-gold-line), 0 12px 32px -14px rgba(0, 0, 0, 0.55);
+  font: 12px/1.4 var(--hft-mono); color: var(--hft-ink); white-space: nowrap;
+  animation: hft-dispatch-in 520ms var(--hft-out) both; }
+.sf.sf-el.hft-dispatch.leaving { animation: hft-dispatch-out 600ms ease-in both; }
+.hft-dispatch-mark { color: var(--hft-gold); }
+.hft-dispatch-title { font-weight: 600; letter-spacing: 0.3px; color: var(--hft-gold); }
+.hft-dispatch-text { color: var(--hft-ink); }
+.hft-dispatch-sub { color: var(--hft-faint); overflow: hidden; text-overflow: ellipsis; }
+.sf.sf-el.hft-dispatch.tone-warn { box-shadow: inset 0 0 0 1px var(--hft-warn), 0 12px 32px -14px rgba(0, 0, 0, 0.55); }
+.sf.sf-el.hft-dispatch.tone-error { box-shadow: inset 0 0 0 1px var(--hft-bad-line), 0 12px 32px -14px rgba(0, 0, 0, 0.55); }
+.sf.sf-el.hft-dispatch.tone-error .hft-dispatch-mark, .sf.sf-el.hft-dispatch.tone-error .hft-dispatch-title { color: var(--hft-bad); }
+.sf.sf-el.hft-dispatch.tone-warn .hft-dispatch-title { color: var(--hft-warn); }
+@keyframes hft-dispatch-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes hft-dispatch-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px); } }
+
 /* ---------- subagents: Tern measures agent rows itself, so only face and color change here */
 .sf.sf-agent[data-role='subagent'] { background: none; box-shadow: none; color: var(--hft-ink); }
 .sf.sf-agent[data-role='subagent'] .sf-agent-row { background: none; box-shadow: none; }
@@ -423,7 +467,7 @@
 
 /* ---------- motion: quiet arrivals; outcomes get a brief accent. One curve throughout. */
 .sf.sf-card[data-role='message-user'] { animation: hft-lift 420ms var(--hft-out) both; }
-.sf.sf-card:is([data-role='message-assistant'], [data-role='error'], [data-role='approval'],
+.sf.sf-card:is([data-role='message-assistant'], [data-role='error'], [data-role='undelivered'], [data-role='approval'],
   [data-role='clarification']), .sf.sf-text[data-role='notice'],
 .sf.sf-tool[data-role='tool'] { animation: hft-rise 360ms var(--hft-out) both; }
 .sf.sf-row[data-role='activity'] { animation: hft-rise 300ms var(--hft-out) both; }
@@ -491,6 +535,7 @@
 .sf-still [data-role='subagent'], .sf-still [data-role='subagent'] .sf-agent-g,
 .sf-still [data-role^='errand'], .sf-still [data-role='thought-folding'] > .sf-section-body,
 .sf-still [data-role='turn']::before, .sf-still [data-role='delivered'],
+.sf-still [data-role='search-hit'] .sf-t-mark, .sf-still .hft-dispatch,
 .sf-still [data-role='bar'] .sf-seg { animation: none; }
 .sf-still [data-role='canvas'] .sf-tool-ic::after, .sf-still [data-role='composer']::after,
 .sf-still [data-role='delivered']::after { display: none; }
@@ -502,6 +547,7 @@
   .sf.sf-text[data-role^='errand'], .sf.sf-row[data-role^='errands'],
   .sf.sf-section[data-role='thought-folding'] > .sf-section-body,
   .sf.sf-col[data-role='turn']::before, .sf.sf-text[data-role='delivered'],
+  .sf.sf-text[data-role='search-hit'] .sf-t-mark, .sf.sf-el.hft-dispatch, .sf.sf-el.hft-dispatch.leaving,
   [data-role='bar'] .sf-seg[data-role='send'] { animation: none; }
   .sf.sf-col[data-role='canvas'] .sf-tool-ic::after, .sf.sf-editor[data-role='composer']::after,
   .sf.sf-text[data-role='delivered']::after { display: none; }

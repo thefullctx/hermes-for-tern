@@ -89,3 +89,32 @@ def test_errand_progress_pill_and_fuel_line():
     assert nodes["dock.working.errands"].wire()["p"]["role"] == "errands"
     assert nodes["dock.fuel"].wire()["p"]["value"] == 0.42
     assert nodes["dock.bar.fuel"].wire()["p"]["text"] == "42% context"
+
+
+def test_search_results_render_as_a_tree_with_inked_matches():
+    state = Conversation()
+    state.begin("find")
+    args = {"pattern": r"timeout=\d", "target": "content"}
+    state.event("tool.start", {"tool_id": "s", "name": "search_files", "args": args})
+    result = {"matches_text": "a.py\n  3: x(timeout=5)\nb.py\n  7: timeout=1, timeout=2"}
+    state.event("tool.complete", {"tool_id": "s", "name": "search_files", "result": result})
+    nodes = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop)).nodes()
+    hit = nodes["main.canvas.r1.r2.output.f1h0"].wire()["p"]["spans"]
+    assert [s["t"] for s in hit if s.get("s") == "mark"] == ["timeout=1", "timeout=2"]
+    assert nodes["main.canvas.r1.r2.output.f0"].wire()["p"]["spans"][0]["t"] == "├─ "
+    assert nodes["main.canvas.r1.r2"].wire()["p"]["target"] == r"timeout=\d"
+
+
+def test_undelivered_turn_offers_retry_only_when_it_can():
+    state = Conversation()
+    state.ready = True
+    state.begin("hello")
+    state.event(
+        "message.complete", {"status": "error", "text": "HTTP 429 from the provider", "error_surface": {}}
+    )
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, None, None, noop)
+    )
+    card = built.nodes()["main.canvas.r1.r2"].wire()
+    assert card["p"]["role"] == "undelivered" and card["p"]["head"][1]["t"].strip() == "429"
+    assert "main.canvas.r1.r2.actions" in built.nodes()

@@ -221,3 +221,57 @@ def test_late_reasoning_is_placed_above_the_reply_it_belongs_to():
     state.event("tool.start", {"tool_id": "t", "name": "terminal", "args": {}})
     state.event("reasoning.delta", {"text": "After a tool."})
     assert [row.kind for row in state.rows] == ["user", "thought", "assistant", "tool", "thought"]
+
+
+def test_a_failed_turn_is_undelivered_once_and_can_be_retried():
+    state = Conversation()
+    state.ready = True
+    state.begin("hello")
+    surface = {"layer": "provider", "code": "rate_limit", "retryable": True}
+    state.event(
+        "message.complete", {"status": "error", "text": "Rate limited (429).", "error_surface": surface}
+    )
+    assert [row.kind for row in state.rows] == ["user", "error"]
+    assert state.rows[-1].name == "turn" and state.rows[-1].result == surface
+    assert state.can_retry and state.last_prompt == "hello"
+    state.begin("hello")
+    assert not state.can_retry
+    state.event("message.complete", {"status": "error", "text": "No.", "error_surface": {"retryable": False}})
+    assert not state.can_retry
+
+
+def test_dispatches_expire_and_turn_news_waits_until_the_pane_is_seen():
+    from hermes_for_tern.state import DISPATCH, LEAVE
+
+    state = Conversation()
+    state.event(
+        "notification.show", {"text": "Credits low", "level": "warn", "kind": "ttl", "key": "credits"}
+    )
+    note = state.dispatches[0]
+    assert (note.text, note.tone, note.key) == ("Credits low", "warn", "credits")
+    state.pace(note.born + DISPATCH - LEAVE / 2)
+    assert note.leaving(note.born + DISPATCH - LEAVE / 2) and state.dispatches
+    state.pace(note.born + DISPATCH + 1)
+    assert not state.dispatches
+    state.event("notification.show", {"text": "Sticky", "level": "info", "kind": "sticky", "key": "s"})
+    state.event("notification.clear", {"key": "s"})
+    assert not state.dispatches
+
+    state.begin("work")
+    state.event("message.complete", {"text": "Done."})
+    assert not state.dispatches  # watching: the delivered line says it all
+    state.begin("more")
+    state.show(False)
+    state.event("message.complete", {"text": "Done again."})
+    assert not state.dispatches
+    state.show(True)
+    assert state.dispatches[0].text == "reply delivered"
+
+
+def test_background_completion_is_dispatched():
+    state = Conversation()
+    state.event("background.complete", {"task_id": "b1", "text": "\nAll 3 files indexed.\nmore"})
+    assert (state.dispatches[0].text, state.dispatches[0].sub) == (
+        "background task came back",
+        "All 3 files indexed.",
+    )
