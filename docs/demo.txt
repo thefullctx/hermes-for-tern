@@ -1,0 +1,6 @@
+account signed-in
+ready
+rename "Hermes"
+surface-play "assets/demo.jsonl"
+wait 200
+shot "hermes-for-tern"

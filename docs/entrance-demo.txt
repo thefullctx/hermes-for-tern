@@ -1,0 +1,32 @@
+account signed-in
+ready
+rename "Hermes"
+surface-play "assets/startup.jsonl" until 1
+shot "entrance-0"
+wait 100
+shot "entrance-1"
+wait 100
+shot "entrance-2"
+wait 100
+shot "entrance-3"
+wait 100
+shot "entrance-4"
+wait 100
+shot "entrance-5"
+wait 100
+shot "entrance-6"
+wait 100
+shot "entrance-7"
+wait 100
+shot "entrance-8"
+wait 100
+shot "entrance-9"
+wait 100
+shot "entrance-10"
+wait 100
+shot "entrance-11"
+wait 100
+shot "entrance-12"
+surface-play "assets/startup.jsonl"
+wait 1500
+shot "entrance-final"

@@ -1,0 +1,22 @@
+account signed-in
+ready
+rename "Hermes"
+surface-play "assets/startup.jsonl"
+wait 600
+shot "startup"
+surface-play "assets/demo.jsonl" until 8
+wait 100
+shot "orbit-1"
+wait 200
+shot "orbit-2"
+wait 200
+shot "orbit-3"
+wait 200
+shot "orbit-4"
+wait 200
+shot "orbit-5"
+wait 200
+shot "orbit-6"
+surface-play "assets/demo.jsonl"
+wait 200
+shot "conversation"
