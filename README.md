@@ -4,16 +4,16 @@
 
 A native [Tern](https://stencil.so/) frontend for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 Type **`hermes`**, just as you normally would. Inside Tern, your conversation is rendered as
-native Markdown, tool cards, buttons and a docked composer. In other terminals, the original
+native Markdown, tool rows, subagents, buttons and a docked composer. In other terminals, the original
 Hermes interface starts normally.
 
 Hermes owns the agent. Tern owns the drawing. This adapter connects their existing protocols;
 it does not patch Hermes, scrape ANSI output or embed a web chat.
 
-## Install
+> An unofficial community frontend. It is not affiliated with or endorsed by Nous Research,
+> the makers of Hermes Agent, or by Stencil, the makers of Tern.
 
-This repository is a private work in progress. Native subagent cards are planned but are not
-implemented in this version.
+## Install
 
 Prerequisites:
 
@@ -45,44 +45,57 @@ To try it without installing the wrapper, run `uv run hermes-for-tern` inside Te
 
 ## Preview
 
-![Hermes for Tern: real terminal tool output and a native Markdown reply](assets/screenshot.png)
+![Hermes for Tern: tools, subagents, a highlighted code block and a delivered turn](assets/screenshot.png)
 
-[Animated native replay](assets/demo.gif). These previews were rendered by Tern from a recorded
-live Hermes session; they are not browser mockups. The account avatar in the replay is Tern's
-headless test identity. Recorded project paths were generalized for portability. The replay uses the current design stylesheet.
+[Animated session](assets/demo.gif). These previews were rendered by Tern itself, not mocked up in
+a browser: a scripted turn (streaming, a failing test run, subagents and a fix) is played through
+the real state and views, frame by frame, and replayed into a headless Tern. The events are
+illustrative, so no model was called. The account avatar is Tern's headless test identity.
 
-To render the same demonstration locally from the repository root:
+To re-record the scenes and render every preview image (needs Tern and ffmpeg):
 
 ```sh
-tern shot docs/design-demo.txt --out work/demo --size 1440x900 --theme dark
+./scripts/render_previews.sh
 ```
 
 ### Visual design
 
-Hermes uses graphite cards with muted gold accents in dark mode, and warm ivory in light mode.
-The startup screen is centered above the composer, with a staged logo/title/details entrance.
-It includes artwork adapted from Hermes Agent, project/model details, and
-three prompt suggestions. UI labels use a system sans-serif stack; prose, input, code, and paths
-retain the terminal font. The dock includes a focused composer and Send/Stop controls.
+Hermes follows the console idiom of Tern's Console chat style, whatever chat style you use:
+one monospace face on the pane's cell grid and a three-cell gutter that carries the glyphs
+(`❯` you, `●` a tool tinted by its status, `✗` an error). Tools have no frame: a title, its
+target and a dotted leader to the time, with output behind a one-pixel guide and `└─` for
+folded lines. Color is the only hierarchy, and Hermes's color is muted gold, on graphite in dark
+mode and warm ivory in light mode. The composer is one prompt line in a hairline box, above a
+flat status strip with the model, project, usage and the send or stop key.
 
-The custom wing-and-orbit indicator is animated by Tern, without per-frame Python updates.
-It becomes a static mark when a response from you is needed, stops under Reduce Motion, and
-pauses in hidden or covered panes. Tool output remains expandable. Styling is scoped to this
-surface, so the surrounding Tern interface follows your theme.
+The startup screen is centered above the composer, with a staged logo/title/details entrance,
+artwork adapted from Hermes Agent, project/model details, and three prompt suggestions.
+While Hermes works, a single line above the composer names what it is doing and for how long.
+Styling is scoped to this surface, so the surrounding Tern interface follows your theme.
 
 ![Hermes startup](assets/startup.png)
 
-[Startup entrance animation](assets/entrance.gif). Render it with
-`tern shot docs/entrance-demo.txt --out work/entrance --size 1440x900 --theme dark`.
+[Startup entrance animation](assets/entrance.gif).
+
+Code in replies is highlighted with Hermes's own palette, gold keywords beside sky-blue functions,
+sage strings, coral numbers and teal types, in a raised well with a gold edge and language label.
 
 ### Continuous motion and visual demo
 
-During a turn, running tool cards shimmer and show an animated indeterminate bar and elapsed time.
-Streamed answers have a shimmering label and a moving glimmer. A live work panel adds animated
-activity bars and a graph sampled from **received response characters**, not estimated tokens or
-invented model progress. These effects stop when the turn ends and respect Reduce Motion.
+Every step of a turn moves. Your message lifts into the transcript, and replies and tools rise in.
+Streamed text is released at an even pace however bursty the model's output, behind a gold block
+caret, and is written in gold ink that dries: the newest words appear in gold and settle into the
+text color within about half a second. A gold thread runs down the gutter through a turn's steps,
+gold while Hermes works and resting as a hairline afterwards. A finished
+turn is signed `☤ delivered · time · tokens`, a line a gold front writes on before it dries; turns
+longer than a minute also release a few sparks from the `☤`. A running tool's `●` breathes and the dots of
+its leader march toward its live timer; when it finishes, the `●` pops into its outcome color and
+one ring spreads out, and a failure also shakes its line once. A gold streak sweeps the composer's
+top edge while a turn runs. These effects pause in hidden panes and respect Reduce Motion.
 
-[Animated work preview](assets/motion-demo.gif). This recording is a labelled simulation.
+`scripts/record_motion.py` writes the scenes behind the previews (`assets/startup.jsonl` and
+`assets/session.jsonl`); replay one with `surface-play "assets/session.jsonl" paced` in a
+`tern shot` scenario to check motion frame by frame.
 
 For a five-minute simulation inside Tern:
 
@@ -121,7 +134,9 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 
 - Native conversation UI with streamed Markdown and code blocks.
 - Multi-turn conversations using the real Hermes backend and existing tools.
-- Native tool cards with folded output, duration, outcome and optional diffs.
+- Native tool rows with folded output, duration, outcome and optional diffs.
+- Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
+  tokens, time and a one-line summary, with grandchildren nested under their parent.
 - Composer typing, multiline paste, Unicode, native selection and basic undo.
 - Tool approval buttons using the backend's offered choices.
 - Clarification questions: options, multiple selections, free text and skipping.
@@ -174,8 +189,8 @@ Tern pane ⇄ Surface Protocol ⇄ Python adapter ⇄ JSON-RPC pipes ⇄ Hermes 
 - `rpc.py`: bidirectional transport, request matching and backend lifecycle.
 - `state.py`: ordered transcript and pending-request state.
 - `editor.py`: composer text/caret state and UTF-16 edit translation.
-- `views.py`: semantic native components and small theme-aware stylesheet.
-- `design.py` and `design/`: packaged artwork, theme styles and native motion.
+- `views.py`: semantic native components: turns, tools, subagents, questions and the dock.
+- `design.py` and `design/`: packaged artwork, the palette with code colors, styles and motion.
 - `demo_backend.py`: isolated simulation using the same JSON-RPC event path.
 - `app.py`: UI event loop, streaming updates, approvals, clarification and interruption.
 
@@ -187,9 +202,9 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 
 One live conversation per process. Session browsing/resume, restart recovery, model pickers,
 attachments, full slash-command support, voice and desktop browser bridges are not implemented.
-Hermes delegation may appear as an ordinary tool call; dedicated subagent events, child transcripts,
-agent hierarchy and individual-agent controls are not rendered yet. The visual demo currently shows
-sequential work phases, not parallel subagents.
+Subagents show their goal, status, current tool and totals, nested by parent; their transcripts
+and per-agent controls (watch, steer, interrupt) are not available yet. The visual demo shows
+sequential work phases, not subagents.
 Unsupported Hermes launch flags fall back to the original interface rather than being silently discarded.
 Unsupported server requests, including secret/sudo/vault entry, receive an explicit unsupported-method
 error so they cannot leave the agent waiting indefinitely.
@@ -209,7 +224,10 @@ Tested locally on macOS with:
 Live checks exercised native rendering, streamed replies, follow-up context, real terminal tool use,
 clarification through a native button, interruption during a tool call, a successful subsequent turn,
 native Unicode selection/paste/undo, and clean exit. Allow and Deny buttons were exercised against the controlled JSON-RPC fixture because
-the local Hermes approval policy was off. Linux and other Hermes installation methods are unverified.
+the local Hermes approval policy was off. The console design and its motion were checked frame by
+frame in headless Tern renders, and the real startup was checked for stylesheet errors; subagent rows
+were checked against Hermes's event contract with scripted events, not a live delegation.
+Linux and other Hermes installation methods are unverified.
 
 ```sh
 uv run pytest -q
@@ -217,9 +235,10 @@ uv run ruff check src tests
 uv run ruff format --check src tests
 ```
 
-The current suite contains 27 tests covering streaming/interim/final message ordering, tool
-failure/interruption, Unicode edits, server-request answers, process disconnection, reversible launcher
-installation, response activity sampling and demo completion/interruption. They use temporary
+The current suite contains 34 tests covering streaming/interim/final message ordering, paced
+streaming and its fading ink, tool failure/interruption, subagent lifecycles and nesting, delivered
+turns, Unicode edits, server-request answers, process disconnection, reversible launcher installation
+and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 
 ## License and attribution
