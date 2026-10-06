@@ -63,6 +63,7 @@ class Row:
     retryable: bool = False  # a failed turn that can be sent again
     began: float = 0.0  # monotonic start of a thought
     ended: float | None = None  # monotonic end of a thought; None while it streams
+    folded_out: bool = False  # the fold-away frame after folding expires has rendered
 
     def folding(self, now: float) -> bool:
         return self.ended is not None and now - self.ended < FOLD
@@ -252,6 +253,11 @@ class Conversation:
         self._paced_at = now
         for row in self.rows:
             if row.fading(now) or row.folding(now):
+                row.folded_out = False
+                self.touch()
+            elif row.ended is not None and not row.folded_out:
+                # the fade is done; fold away on this frame, not the next event
+                row.folded_out = True
                 self.touch()
             if not row.pending:
                 continue

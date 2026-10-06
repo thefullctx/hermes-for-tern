@@ -255,8 +255,6 @@
   color: color-mix(in srgb, var(--hft-gold) 50%, var(--hft-faint)); }
 .sf.sf-section[data-role='thought-folding'] > .sf-section-body {
   animation: hft-evaporate 5500ms ease-in-out both; }
-@keyframes hft-evaporate { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
-
 /* ---------- errands: Hermes's todo list. In the turn, one row whose items dry from gold as they are
    done; above the composer, a pill whose gold ring fills and, once all are done, seals. */
 [data-role='errands'] .sf-text { color: var(--hft-muted); line-height: var(--hft-lh); }
