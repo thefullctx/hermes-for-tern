@@ -17,7 +17,7 @@ from pathlib import Path
 from tern_sdk import wire
 from tern_sdk.reconcile import View
 
-from hermes_for_tern.design import ASSETS, CSS, DARK, LIGHT
+from hermes_for_tern.design import CSS, DARK, LIGHT, images
 from hermes_for_tern.editor import Draft
 from hermes_for_tern.state import Conversation
 from hermes_for_tern.views import view
@@ -277,8 +277,8 @@ def record(out: Path, script) -> None:
         wire.palette("s1", dark=DARK, light=LIGHT, name={"dark": "Hermes graphite", "light": "Hermes ivory"})
     )
     assets = {}
-    for name in ("hermes", "wordmark"):
-        blob = wire.blob(ASSETS.joinpath(f"{name}.svg").read_bytes(), "image/svg+xml")
+    for name, data in images().items():
+        blob = wire.blob(data, "image/svg+xml")
         send(blob)
         assets[name] = blob.params[0][1]
 

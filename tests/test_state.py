@@ -1,4 +1,4 @@
-from hermes_for_tern.state import FOLD, Conversation
+from hermes_for_tern.state import FOLD, MUSING, Conversation
 
 
 def assistant_texts(state):
@@ -290,3 +290,16 @@ def test_background_completion_is_dispatched():
         "background task came back",
         "All 3 files indexed.",
     )
+
+
+def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks():
+    state = Conversation()
+    state.begin("hello")
+    start = state.heard
+    state.pace(start + MUSING - 0.1)
+    assert not state.musing
+    state.pace(start + MUSING)
+    assert state.musing
+    state.event("message.start", {})
+    state.pace(start + MUSING + 0.1)
+    assert not state.musing

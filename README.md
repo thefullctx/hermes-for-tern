@@ -72,7 +72,9 @@ flat status strip with the model, project, usage and the send or stop key.
 The startup screen is centered above the composer, with a staged logo/title/details entrance:
 the HERMES wordmark writes itself in, stroke by stroke in gold over its own faint outline, beside
 artwork adapted from Hermes Agent, project/model details, and three prompt suggestions.
-While Hermes works, a single line above the composer names what it is doing and for how long.
+While Hermes works, a single line above the composer names what it is doing and for how long;
+when Hermes thinks in silence for a few seconds, its spinner gives way to the pen writing the H of
+the wordmark, again and again.
 Styling is scoped to this surface, so the surrounding Tern interface follows your theme.
 
 ![Hermes startup](assets/startup.png)
@@ -89,11 +91,14 @@ Streamed text is released at an even pace however bursty the model's output, beh
 caret, and is written in gold ink that dries: the newest words appear in gold and settle into the
 text color within about half a second. A gold thread runs down the gutter through a turn's steps,
 gold while Hermes works and resting as a hairline afterwards. A finished
-turn is signed `☤ delivered · time · tokens`, a line a gold front writes on before it dries; turns
+turn closes with `☤ delivered · time · tokens`, a line a gold front writes on before it dries, and
+Hermes signs it with the wordmark's H, whose ink dries to faint when the next turn begins; turns
 longer than a minute also release a few sparks from the `☤`. A running tool's `●` breathes and the dots of
 its leader march toward its live timer; when it finishes, the `●` pops into its outcome color and
 one ring spreads out, and a failure also shakes its line once. A gold streak sweeps the composer's
-top edge while a turn runs. These effects pause in hidden panes and respect Reduce Motion.
+top edge while a turn runs. The wordmark, the signatures, the thread and every underline are drawn
+with one pen: the same stroke and ease. These effects respect Reduce Motion and, apart from the
+pen's strokes inside its images, pause in hidden panes.
 
 `scripts/record_motion.py` writes the scenes behind the previews (`assets/startup.jsonl` and
 `assets/session.jsonl`); replay one with `surface-play "assets/session.jsonl" paced` in a
@@ -140,11 +145,12 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Reasoning as a thought in faint gold ink that fades and folds to `◇ pondered for 6s` when the answer
   starts (Hermes sends reasoning when its `display.show_reasoning` setting is on).
 - Hermes's todo list as the turn's errands: one row whose items dry from gold as they are done, and a
-  pill above the composer whose gold ring fills and seals when all are delivered.
+  pill above the composer whose gold ring fills and seals, signed with Hermes's H, when all are
+  delivered.
 - Context use as a gold hairline on the composer's top edge, amber from 80% and red from 95%.
 - Search results (`search_files`) as a file tree with line numbers, each match underlined in gold ink
   that draws itself in.
-- Failed turns as `✗ Undelivered` with the provider's code, and a `retry ⏎` key when Hermes marks the
+- Failed turns as `✗ Undelivered`, underlined in red ink, with the provider's code, and a `retry ⏎` key when Hermes marks the
   failure retryable (Enter in an empty composer retries too).
 - Dispatches: short notes above the composer for Hermes's notices, finished background tasks, and a
   reply that was delivered (or failed) while the pane was hidden, shown when you come back.
@@ -248,10 +254,10 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 46 tests covering streaming/interim/final message ordering, paced
+The current suite contains 49 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns, Unicode edits, server-request answers, process disconnection, reversible launcher installation
+turns and Hermes's signature and working pen, Unicode edits, server-request answers, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 
