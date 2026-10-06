@@ -247,8 +247,8 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 45 tests covering streaming/interim/final message ordering, paced
-streaming and its fading ink, thoughts, errands and the context line, dispatches, retryable
+The current suite contains 46 tests covering streaming/interim/final message ordering, paced
+streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns, Unicode edits, server-request answers, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary

@@ -172,6 +172,21 @@ def test_reasoning_streams_into_a_thought_that_settles_when_the_answer_starts():
     assert state.rows[-1].kind == "assistant"
 
 
+def test_a_settled_thought_folds_away_on_the_frame_its_fade_ends():
+    state = Conversation()
+    state.begin("why?")
+    state.event("reasoning.delta", {"text": "Thinking."})
+    state.event("message.delta", {"text": "Answer."})
+    ended = state.rows[1].ended
+    assert ended is not None
+    state.pace(ended + 2.0)  # everything revealed; the fold's fade still running
+    base = state.revision
+    state.pace(ended + FOLD + 0.01)
+    assert state.revision == base + 1  # folds away on this frame, not at the next event
+    state.pace(ended + FOLD + 0.02)
+    assert state.revision == base + 1  # and only once
+
+
 def test_reasoning_available_is_ignored_because_hermes_fills_it_with_the_reply():
     state = Conversation()
     state.begin("why?")
