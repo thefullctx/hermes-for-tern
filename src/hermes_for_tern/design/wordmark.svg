@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 230 48" fill="none" stroke="#d5b475" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- HERMES in single-line strokes, a faint ghost, then the ink that traces
+       over it, one path per pen stroke in writing order. -->
+  <g class="hft-word-ghost" stroke-opacity="0.25">
+    <path d="M4 4V44M4 24H32M32 4V44" />
+    <path d="M68 4H44V44H68M44 24H64" />
+    <path d="M80 44V4H93C100 4 104 8 104 14C104 20 100 24 93 24H80M92 24L106 44" />
+    <path d="M118 44V4L135 30L152 4V44" />
+    <path d="M188 4H164V44H188M164 24H184" />
+    <path d="M224 10C221 6 216 4 211 4C204 4 200 8 200 13C200 19 205 21 212 23C220 25 226 28 226 34C226 40 221 44 213 44C208 44 203 42 200 38" />
+  </g>
+  <g class="hft-word-ink">
+    <path class="hft-stroke-1" pathLength="1" d="M4 4V44" />
+    <path class="hft-stroke-2" pathLength="1" d="M4 24H32" />
+    <path class="hft-stroke-3" pathLength="1" d="M32 4V44" />
+    <path class="hft-stroke-4" pathLength="1" d="M68 4H44V44H68" />
+    <path class="hft-stroke-5" pathLength="1" d="M44 24H64" />
+    <path class="hft-stroke-6" pathLength="1" d="M80 44V4H93C100 4 104 8 104 14C104 20 100 24 93 24H80" />
+    <path class="hft-stroke-7" pathLength="1" d="M92 24L106 44" />
+    <path class="hft-stroke-8" pathLength="1" d="M118 44V4L135 30L152 4V44" />
+    <path class="hft-stroke-9" pathLength="1" d="M188 4H164V44H188" />
+    <path class="hft-stroke-10" pathLength="1" d="M164 24H184" />
+    <path class="hft-stroke-11" pathLength="1" d="M224 10C221 6 216 4 211 4C204 4 200 8 200 13C200 19 205 21 212 23C220 25 226 28 226 34C226 40 221 44 213 44C208 44 203 42 200 38" />
+  </g>
+</svg>

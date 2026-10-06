@@ -276,9 +276,11 @@ def record(out: Path, script) -> None:
     send(
         wire.palette("s1", dark=DARK, light=LIGHT, name={"dark": "Hermes graphite", "light": "Hermes ivory"})
     )
-    logo = wire.blob(ASSETS.joinpath("hermes.svg").read_bytes(), "image/svg+xml")
-    send(logo)
-    assets = {"hermes": logo.params[0][1]}
+    assets = {}
+    for name in ("hermes", "wordmark"):
+        blob = wire.blob(ASSETS.joinpath(f"{name}.svg").read_bytes(), "image/svg+xml")
+        send(blob)
+        assets[name] = blob.params[0][1]
 
     state = Conversation()
     state._paced_at = 0.0

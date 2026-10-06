@@ -385,6 +385,15 @@ def brand_image(assets: dict[str, str], name: str, size: int, *, key: str, role:
     return ui.icon("sparkle", tone="accent", key=key, role=role)
 
 
+def wordmark(assets: dict[str, str]):
+    """HERMES, written in stroke by stroke over its own faint ghost; plain text without images."""
+    if "wordmark" in assets:
+        return ui.image(
+            assets["wordmark"], w=163, h=34, alt="Hermes", key="wordmark", role="welcome-wordmark"
+        )
+    return ui.html.h1("Hermes", class_="hft-wordmark", key="wordmark")
+
+
 def errand_pill(todos: list[dict]):
     """The turn's errands as a pill: a gold ring that fills as they are done."""
     done, total, current = progress(todos)
@@ -450,7 +459,7 @@ def view(
                     brand_image(assets, "hermes", 84, key="logo", role="welcome-logo"),
                     ui.col(
                         ui.html.div("HERMES FOR TERN", class_="hft-eyebrow", key="eyebrow"),
-                        ui.html.h1("Hermes", class_="hft-wordmark", key="wordmark"),
+                        wordmark(assets),
                         gap="sm",
                         key="name",
                     ),

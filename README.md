@@ -69,7 +69,8 @@ mode and warm ivory in light mode. Your words are matte gold and Hermes's replie
 so who is speaking reads at a glance. The composer is one prompt line in a hairline box, above a
 flat status strip with the model, project, usage and the send or stop key.
 
-The startup screen is centered above the composer, with a staged logo/title/details entrance,
+The startup screen is centered above the composer, with a staged logo/title/details entrance:
+the HERMES wordmark writes itself in, stroke by stroke in gold over its own faint outline, beside
 artwork adapted from Hermes Agent, project/model details, and three prompt suggestions.
 While Hermes works, a single line above the composer names what it is doing and for how long.
 Styling is scoped to this surface, so the surrounding Tern interface follows your theme.
