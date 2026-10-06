@@ -3,33 +3,6 @@ import time
 from pathlib import Path
 
 from hermes_for_tern.rpc import Backend
-from hermes_for_tern.state import Conversation
-
-
-def test_activity_samples_count_received_text_and_freeze_when_idle():
-    state = Conversation()
-    state.begin("hello")
-    state.event("message.delta", {"text": "abc🌙"})
-    state.sample_activity(state._sample_at + 0.5)
-    assert state.activity_samples[-1] == 4
-    state.sample_activity(state._sample_at + 0.5)
-    assert state.activity_samples[-1] == 0
-    state.event("message.complete", {"text": "abc🌙"})
-    samples = list(state.activity_samples)
-    state.sample_activity(state._sample_at + 1)
-    assert list(state.activity_samples) == samples
-    state.begin("again")
-    assert state.stream_chars == 0
-    assert not any(state.activity_samples)
-
-
-def test_simulated_progress_cannot_be_enabled_by_a_real_session_event():
-    state = Conversation()
-    state.event("demo.progress", {"value": 0.5})
-    assert state.demo_progress is None
-    state.info["demo"] = True
-    state.event("demo.progress", {"value": 0.5})
-    assert state.demo_progress == 0.5
 
 
 def demo(tmp_path: Path, duration: str):

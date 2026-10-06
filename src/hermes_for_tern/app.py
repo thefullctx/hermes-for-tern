@@ -69,7 +69,7 @@ class App:
                     if item is not None:
                         self.input(item)
                     now = time.monotonic()
-                    self.state.sample_activity(now)
+                    self.state.pace(now)
                     if self.state.revision != revision and now - last_render >= 0.033:
                         self.render()
                         revision = self.state.revision
