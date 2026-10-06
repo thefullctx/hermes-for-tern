@@ -1,0 +1,35 @@
+name: Bug report
+description: Something looks or works wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot or recording
+      description: A screenshot from Tern helps a lot for anything visual.
+  - type: input
+    id: tern
+    attributes:
+      label: Tern version
+      placeholder: tern --version
+    validations:
+      required: true
+  - type: input
+    id: hermes
+    attributes:
+      label: Hermes version
+      placeholder: hermes --version
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system
+      placeholder: macOS 26, Ubuntu 24.04, …

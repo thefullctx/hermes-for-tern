@@ -155,3 +155,52 @@ def test_a_completed_turn_is_signed_with_its_time_and_tokens_but_a_stopped_one_i
     state.begin("again")
     state.event("message.complete", {"status": "interrupted"})
     assert state.rows[-1].kind == "notice"
+
+
+def test_reasoning_streams_into_a_thought_that_settles_when_the_answer_starts():
+    state = Conversation()
+    state.begin("why?")
+    state.event("reasoning.delta", {"text": "Timing "})
+    state.event("reasoning.delta", {"text": "or environment."})
+    thought = state.rows[-1]
+    assert thought.kind == "thought" and thought.text == "Timing or environment." and thought.ended is None
+    state.event("session.usage", {"usage": {"context_percent": 4}})
+    assert thought.ended is None
+    state.event("message.delta", {"text": "Let me check."})
+    assert thought.ended is not None and thought.duration is not None
+    assert thought.folding(thought.ended) and not thought.folding(thought.ended + 5)
+    assert state.rows[-1].kind == "assistant"
+
+
+def test_a_finished_reasoning_block_becomes_a_settled_thought():
+    state = Conversation()
+    state.begin("why?")
+    state.event("reasoning.available", {"text": "All at once."})
+    assert state.rows[-1].kind == "thought" and state.rows[-1].ended is not None
+
+
+def todos(*statuses):
+    return {"todos": [{"id": str(i), "content": f"t{i}", "status": s} for i, s in enumerate(statuses)]}
+
+
+def test_errands_follow_the_newest_todo_snapshot_and_hide_the_todo_tool():
+    state = Conversation()
+    state.begin("work")
+    state.event("tool.start", {"tool_id": "t", "name": "todo", "args": {}})
+    state.event("todo.updated", {**todos("in_progress", "pending"), "revision": 2})
+    state.event("tool.complete", {"tool_id": "t", "name": "todo", "result": {"output": "ok"}})
+    state.event("todo.updated", {**todos("completed", "completed"), "revision": 1})
+    errands = [row for row in state.rows if row.kind == "errands"]
+    assert len(errands) == 1 and [i["status"] for i in errands[0].items] == ["in_progress", "pending"]
+    assert not any(row.kind == "tool" for row in state.rows)
+    state.event("todo.updated", {**todos("completed", "in_progress"), "revision": 3})
+    assert [i["status"] for i in errands[0].items] == ["completed", "in_progress"]
+
+
+def test_errands_do_not_split_a_streaming_reply():
+    state = Conversation()
+    state.begin("work")
+    state.event("message.delta", {"text": "First half, "})
+    state.event("todo.updated", {**todos("pending"), "revision": 1})
+    state.event("message.delta", {"text": "second half."})
+    assert [row.text for row in state.rows if row.kind == "assistant"] == ["First half, second half."]

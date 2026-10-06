@@ -14,6 +14,10 @@ DRAIN = 0.35
 MIN_RATE = 120.0
 # Newly revealed text is written in gold ink that dries: each FADE age ends one stage.
 FADE = (0.12, 0.32, 0.6)
+# A finished thought stays open this long while it fades, then folds to one line.
+FOLD = 1.4
+# Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
+QUIET_TOOLS = {"todo"}
 
 
 def delivered(seconds: float, usage: dict) -> str:
@@ -50,6 +54,12 @@ class Row:
     carry: float = 0.0
     reveals: deque[tuple[float, int]] = field(default_factory=deque)  # (time, shown) steps
     agents: list[Agent] = field(default_factory=list)  # subagents a delegate_task call spawned
+    items: list[dict] = field(default_factory=list)  # a turn's errands (Hermes's todo list)
+    began: float = 0.0  # monotonic start of a thought
+    ended: float | None = None  # monotonic end of a thought; None while it streams
+
+    def folding(self, now: float) -> bool:
+        return self.ended is not None and now - self.ended < FOLD
 
     @property
     def visible(self) -> str:
@@ -179,6 +189,11 @@ class Conversation:
         self.revision = 0
         self.turn_started: float | None = None
         self.agents: dict[str, Agent] = {}
+        self.todos: list[dict] = []
+        self._todo_revision = -1
+        self._errands: Row | None = None
+        self._thought: Row | None = None
+        self._quiet: set[str] = set()
         self._paced_at = time.monotonic()
 
     def touch(self) -> None:
@@ -195,6 +210,8 @@ class Conversation:
         self.add("user", text)
         self._assistant = None
         self._turn_assistants = []
+        self._errands = None
+        self._thought = None
         self.busy = True
         self.activity = "Thinking"
         self.turn_started = time.monotonic()
@@ -205,7 +222,7 @@ class Conversation:
         dt = min(0.1, max(0.0, now - self._paced_at))
         self._paced_at = now
         for row in self.rows:
-            if row.fading(now):
+            if row.fading(now) or row.folding(now):
                 self.touch()
             if not row.pending:
                 continue
@@ -223,7 +240,43 @@ class Conversation:
             self._turn_assistants.append(self._assistant)
         return self._assistant
 
+    def settle(self) -> None:
+        """Anything but more reasoning ends the current thought, which then fades and folds."""
+        if self._thought is not None:
+            now = time.monotonic()
+            self._thought.duration = now - self._thought.began
+            self._thought.ended = now
+            self._thought = None
+
+    def think(self, text: str, whole: bool) -> None:
+        if not text:
+            return
+        if self._thought is None:
+            self._assistant = None
+            self._thought = self.add("thought", shown=0, began=time.monotonic())
+        self._thought.text += text
+        self.activity = "Thinking"
+        if whole:
+            self.settle()
+
+    def errands(self, payload: dict) -> None:
+        revision = int(payload.get("revision") or 0)
+        if revision < self._todo_revision:
+            return
+        self._todo_revision = revision
+        self.todos = [t for t in payload.get("todos") or [] if isinstance(t, dict)]
+        if self.busy and self.todos:
+            if self._errands is None:
+                self._errands = self.add("errands")
+            self._errands.items = [dict(t) for t in self.todos]
+
     def event(self, kind: str, payload: dict) -> None:
+        if kind in ("reasoning.delta", "reasoning.available"):
+            self.think(str(payload.get("text", "")), whole=kind == "reasoning.available")
+            self.touch()
+            return
+        if kind not in ("session.usage", "status.update", "todo.updated", "notification.show"):
+            self.settle()
         if kind == "session.info":
             self.info.update(payload)
             self.ready = True
@@ -245,6 +298,12 @@ class Conversation:
             self._assistant = None
         elif kind.startswith("subagent."):
             self.subagent(kind, payload)
+        elif kind == "todo.updated":
+            self.errands(payload)
+        elif kind in ("tool.start", "tool.complete") and (
+            payload.get("name") in QUIET_TOOLS or str(payload.get("tool_id", "")) in self._quiet
+        ):
+            self._quiet.add(str(payload.get("tool_id", "")))
         elif kind == "tool.start":
             self._assistant = None
             tid = str(payload.get("tool_id", ""))

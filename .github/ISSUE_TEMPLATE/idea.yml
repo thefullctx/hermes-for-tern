@@ -1,0 +1,16 @@
+name: Idea
+description: Suggest a feature, an animation or a design change.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like Hermes for Tern to do or look like?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What would it make better for you?
