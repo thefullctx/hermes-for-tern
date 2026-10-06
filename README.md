@@ -65,7 +65,8 @@ one monospace face on the pane's cell grid and a three-cell gutter that carries 
 (`❯` you, `●` a tool tinted by its status, `✗` an error). Tools have no frame: a title, its
 target and a dotted leader to the time, with output behind a one-pixel guide and `└─` for
 folded lines. Color is the only hierarchy, and Hermes's color is muted gold, on graphite in dark
-mode and warm ivory in light mode. The composer is one prompt line in a hairline box, above a
+mode and warm ivory in light mode. Your words are matte silver and Hermes's replies matte gold,
+so who is speaking reads at a glance. The composer is one prompt line in a hairline box, above a
 flat status strip with the model, project, usage and the send or stop key.
 
 The startup screen is centered above the composer, with a staged logo/title/details entrance,
@@ -140,6 +141,12 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Hermes's todo list as the turn's errands: one row whose items dry from gold as they are done, and a
   pill above the composer whose gold ring fills and seals when all are delivered.
 - Context use as a gold hairline on the composer's top edge, amber from 80% and red from 95%.
+- Search results (`search_files`) as a file tree with line numbers, each match underlined in gold ink
+  that draws itself in.
+- Failed turns as `✗ Undelivered` with the provider's code, and a `retry ⏎` key when Hermes marks the
+  failure retryable (Enter in an empty composer retries too).
+- Dispatches: short notes above the composer for Hermes's notices, finished background tasks, and a
+  reply that was delivered (or failed) while the pane was hidden, shown when you come back.
 - Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
   tokens, time and a one-line summary, with grandchildren nested under their parent.
 - Composer typing, multiline paste, Unicode, native selection and basic undo.
@@ -240,8 +247,9 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 39 tests covering streaming/interim/final message ordering, paced
-streaming and its fading ink, thoughts, errands and the context line, tool failure/interruption, subagent lifecycles and nesting, delivered
+The current suite contains 45 tests covering streaming/interim/final message ordering, paced
+streaming and its fading ink, thoughts, errands and the context line, dispatches, retryable
+failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns, Unicode edits, server-request answers, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.

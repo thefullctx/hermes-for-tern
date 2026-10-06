@@ -18,6 +18,9 @@ FADE = (0.12, 0.32, 0.6)
 FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
 QUIET_TOOLS = {"todo"}
+# Seconds a dispatch stays; the last LEAVE of them it fades out.
+DISPATCH = 6.0
+LEAVE = 0.6
 
 
 def delivered(seconds: float, usage: dict) -> str:
@@ -55,6 +58,9 @@ class Row:
     reveals: deque[tuple[float, int]] = field(default_factory=deque)  # (time, shown) steps
     agents: list[Agent] = field(default_factory=list)  # subagents a delegate_task call spawned
     items: list[dict] = field(default_factory=list)  # a turn's errands (Hermes's todo list)
+    args: dict = field(default_factory=dict)  # a tool's arguments
+    result: dict | None = None  # a tool's structured result, or a failed turn's error surface
+    retryable: bool = False  # a failed turn that can be sent again
     began: float = 0.0  # monotonic start of a thought
     ended: float | None = None  # monotonic end of a thought; None while it streams
 
@@ -156,6 +162,24 @@ class Agent:
 
 
 @dataclass
+class Dispatch:
+    """A short note above the composer: Hermes's notices and news from while you were away."""
+
+    key: str
+    text: str
+    sub: str = ""
+    tone: str = "info"
+    ttl: float | None = DISPATCH  # None stays until Hermes clears it
+    born: float = 0.0
+
+    def leaving(self, now: float) -> bool:
+        return self.ttl is not None and now - self.born > self.ttl - LEAVE
+
+    def gone(self, now: float) -> bool:
+        return self.ttl is not None and now - self.born > self.ttl
+
+
+@dataclass
 class Question:
     rid: str
     method: str
@@ -194,6 +218,10 @@ class Conversation:
         self._errands: Row | None = None
         self._thought: Row | None = None
         self._quiet: set[str] = set()
+        self.visible = True
+        self.dispatches: list[Dispatch] = []
+        self._away: list[Dispatch] = []  # held until the pane is seen again
+        self.last_prompt = ""
         self._paced_at = time.monotonic()
 
     def touch(self) -> None:
@@ -207,6 +235,7 @@ class Conversation:
         return row
 
     def begin(self, text: str) -> None:
+        self.last_prompt = text
         self.add("user", text)
         self._assistant = None
         self._turn_assistants = []
@@ -233,6 +262,10 @@ class Conversation:
                 row.carry -= step
                 row.reveal(step, now)
                 self.touch()
+        before = [(d.key, d.leaving(now)) for d in self.dispatches]
+        self.dispatches = [d for d in self.dispatches if not d.gone(now)]
+        if [(d.key, d.leaving(now)) for d in self.dispatches] != before:
+            self.touch()
 
     def assistant(self) -> Row:
         if self._assistant is None:
@@ -323,7 +356,12 @@ class Conversation:
             tid = str(payload.get("tool_id", ""))
             args = payload.get("args") or {}
             target = next(
-                (str(args[k]) for k in ("command", "path", "file_path", "query", "url") if args.get(k)), ""
+                (
+                    str(args[k])
+                    for k in ("command", "pattern", "path", "file_path", "query", "url")
+                    if args.get(k)
+                ),
+                "",
             )
             row = self.add(
                 "tool",
@@ -332,6 +370,7 @@ class Conversation:
                 target=target[:240],
                 status="running",
                 collapsed=payload.get("name") != "delegate_task",  # its children stay in view
+                args=args if isinstance(args, dict) else {},
             )
             self.tools[tid] = row
             self.activity = row.name.replace("_", " ")
@@ -360,21 +399,33 @@ class Conversation:
             row.text = readable(output) or payload.get("result_text") or str(payload.get("summary", ""))
             row.duration = payload.get("duration_s")
             row.diff = payload.get("inline_diff") or ""
+            row.result = result if isinstance(result, dict) else None
             self.activity = "Thinking"
         elif kind == "message.complete":
             text = readable(payload.get("text", ""))
-            # Final text replaces the streamed segment; reused text adds no new row.
-            if text and not payload.get("response_reused"):
+            status = payload.get("status", "complete")
+            failed = status == "error" or bool(payload.get("error"))
+            # Final text replaces the streamed segment; reused text adds no new row. A failed turn's
+            # text is its error, shown once as the error, not as a reply.
+            if text and not failed and not payload.get("response_reused"):
                 if self._assistant is not None:
                     self._assistant.replace(text)
                 elif not self._turn_assistants or self._turn_assistants[-1].text != text:
                     self.assistant().replace(text)
-            status = payload.get("status", "complete")
             if status == "interrupted":
                 self.add("notice", "Stopped")
-            elif status == "error" or payload.get("error"):
-                error = payload.get("error") or payload.get("failure_reason") or "The turn failed. Try again."
-                self.add("error", str(error))
+            elif failed:
+                error = text or payload.get("error") or payload.get("failure_reason") or "The turn failed."
+                surface = (
+                    payload.get("error_surface") if isinstance(payload.get("error_surface"), dict) else {}
+                )
+                self.add(
+                    "error",
+                    str(error),
+                    name="turn",
+                    result=surface,
+                    retryable=bool(surface.get("retryable", True)) and bool(self.last_prompt),
+                )
             for tool in self.tools.values():
                 if tool.status == "running":
                     tool.status = "cancelled" if status == "interrupted" else "error"
@@ -382,11 +433,17 @@ class Conversation:
                 if agent.status in ("pending", "running"):
                     agent.status = "aborted" if status == "interrupted" else "failed"
             self.usage = payload.get("usage") or self.usage
-            if status == "complete" and not payload.get("error") and self.turn_started is not None:
-                self.add(
-                    "delivered",
-                    delivered(time.monotonic() - self.turn_started, self.usage),
-                    duration=time.monotonic() - self.turn_started,
+            if status == "complete" and not failed and self.turn_started is not None:
+                took = time.monotonic() - self.turn_started
+                self.add("delivered", delivered(took, self.usage), duration=took)
+                self.dispatch("turn", "reply delivered", delivered(took, {}).split(" · ", 1)[1], away=True)
+            elif failed:
+                self.dispatch(
+                    "turn",
+                    "reply undelivered",
+                    "the turn failed; retry when you are back",
+                    "error",
+                    away=True,
                 )
             self.busy = False
             self.activity = "Ready"
@@ -403,9 +460,67 @@ class Conversation:
                 self.activity = "Could not start Hermes"
         elif kind == "notice":
             self.add("notice", str(payload.get("message", "")))
+        elif kind == "notification.show":
+            key = str(payload.get("key") or payload.get("id") or payload.get("text", ""))
+            ttl = payload.get("ttl_ms")
+            sticky = payload.get("kind") == "sticky"
+            tone = {"warn": "warn", "error": "error", "success": "success"}.get(
+                str(payload.get("level")), "info"
+            )
+            self.dispatch(
+                key,
+                str(payload.get("text", "")),
+                tone=tone,
+                ttl=None
+                if sticky
+                else (ttl / 1000 if isinstance(ttl, (int, float)) and ttl > 0 else DISPATCH),
+            )
+        elif kind == "notification.clear":
+            key = str(payload.get("key", ""))
+            self.dispatches = [d for d in self.dispatches if d.key != key]
+            self._away = [d for d in self._away if d.key != key]
+        elif kind == "background.complete":
+            first = next(
+                (line.strip() for line in str(payload.get("text", "")).splitlines() if line.strip()), ""
+            )
+            self.dispatch(
+                f"bg-{payload.get('task_id', '')}", "background task came back", first[:120], "success"
+            )
         elif kind == "request.cancel":
             self.questions.pop(str(payload.get("id")), None)
         self.touch()
+
+    def dispatch(
+        self,
+        key: str,
+        text: str,
+        sub: str = "",
+        tone: str = "info",
+        ttl: float | None = DISPATCH,
+        away: bool = False,
+    ) -> None:
+        """Show a note now, or, for news of a turn (`away`), only if the pane was hidden, on return."""
+        note = Dispatch(key, text, sub, tone, ttl, time.monotonic())
+        if away and self.visible:
+            return
+        queue = self._away if not self.visible else self.dispatches
+        queue[:] = [d for d in queue if d.key != key] + [note]
+
+    def show(self, visible: bool) -> None:
+        """The pane was hidden or shown; held notes appear on return."""
+        self.visible = visible
+        if visible and self._away:
+            now = time.monotonic()
+            for note in self._away:
+                note.born = now
+                self.dispatches = [d for d in self.dispatches if d.key != note.key] + [note]
+            self._away = []
+        self.touch()
+
+    @property
+    def can_retry(self) -> bool:
+        last = next((r for r in reversed(self.rows) if r.kind not in ("notice",)), None)
+        return bool(last and last.kind == "error" and last.retryable and self.ready and not self.busy)
 
     def subagent(self, kind: str, payload: dict) -> None:
         """Children join the delegate_task call that spawned them; late events never revive one."""
