@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 48" fill="none" stroke="#d5b475" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Hermes's signature: the wordmark's H, a faint ghost and its ink, one path per pen stroke.
+       Tern styles an image only from inside it, so design.py sends one copy per use, naming the
+       use on the wrapper (hft-mono-signed, -dry, -errands or -pen). -->
+  <g class="hft-mono">
+    <path class="hft-mono-ghost" stroke-opacity="0" d="M4 4V44M4 24H32M32 4V44" />
+    <g class="hft-mono-ink">
+      <path class="hft-mono-1" pathLength="1" d="M4 4V44" />
+      <path class="hft-mono-2" pathLength="1" d="M4 24H32" />
+      <path class="hft-mono-3" pathLength="1" d="M32 4V44" />
+    </g>
+  </g>
+</svg>

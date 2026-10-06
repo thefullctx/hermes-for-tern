@@ -118,3 +118,37 @@ def test_undelivered_turn_offers_retry_only_when_it_can():
     card = built.nodes()["main.canvas.r1.r2"].wire()
     assert card["p"]["role"] == "undelivered" and card["p"]["head"][1]["t"].strip() == "429"
     assert "main.canvas.r1.r2.actions" in built.nodes()
+
+
+def signatures(state, assets):
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/project"), noop, noop, noop, noop, noop, assets=assets)
+    )
+    return {
+        node["p"]["role"]: node["p"]["blob"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node["k"] == "image" and node["p"].get("role") in ("signature", "working-pen", "errands-signature")
+    }
+
+
+def test_hermes_signs_its_latest_delivered_turn_and_the_ink_dries_with_the_next():
+    assets = {f"monogram-{use}": use for use in ("signed", "dry", "errands", "pen")}
+    state = Conversation()
+    state.begin("hello")
+    state.event("message.complete", {"text": "Hi.", "status": "complete"})
+    assert signatures(state, assets) == {"signature": "signed"}
+    state.begin("again")
+    assert signatures(state, assets) == {"signature": "dry"}
+    assert signatures(state, {}) == {}
+
+
+def test_the_pen_replaces_the_spinner_only_while_hermes_muses_and_errands_are_unfinished():
+    assets = {f"monogram-{use}": use for use in ("signed", "dry", "errands", "pen")}
+    state = Conversation()
+    state.begin("hello")
+    assert signatures(state, assets) == {}
+    state.musing = True
+    assert signatures(state, assets) == {"working-pen": "pen"}
+    state.event("todo.updated", {"todos": [{"id": "1", "content": "Look", "status": "completed"}]})
+    state.musing = True
+    assert signatures(state, assets) == {"errands-signature": "errands"}

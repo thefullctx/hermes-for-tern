@@ -18,6 +18,8 @@ FADE = (0.12, 0.32, 0.6)
 FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
 QUIET_TOOLS = {"todo"}
+# Seconds of silence while thinking after which Hermes is musing and the pen writes its working mark.
+MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.
 DISPATCH = 6.0
 LEAVE = 0.6
@@ -224,6 +226,8 @@ class Conversation:
         self._away: list[Dispatch] = []  # held until the pane is seen again
         self.last_prompt = ""
         self._paced_at = time.monotonic()
+        self.heard = time.monotonic()  # when Hermes last sent anything but usage
+        self.musing = False
 
     def touch(self) -> None:
         self.revision += 1
@@ -245,12 +249,19 @@ class Conversation:
         self.busy = True
         self.activity = "Thinking"
         self.turn_started = time.monotonic()
+        self.heard = self.turn_started
         self.touch()
 
     def pace(self, now: float) -> None:
         """Reveal streamed text smoothly, however bursty its arrival."""
         dt = min(0.1, max(0.0, now - self._paced_at))
         self._paced_at = now
+        musing = (
+            self.busy and self.activity == "Thinking" and not self.questions and now - self.heard >= MUSING
+        )
+        if musing != self.musing:
+            self.musing = musing
+            self.touch()
         for row in self.rows:
             if row.fading(now) or row.folding(now):
                 row.folded_out = False
@@ -314,6 +325,8 @@ class Conversation:
             self._errands.items = [dict(t) for t in self.todos]
 
     def event(self, kind: str, payload: dict) -> None:
+        if kind != "session.usage":
+            self.heard = time.monotonic()
         if kind == "reasoning.delta":
             self.think(str(payload.get("text", "")))
             self.touch()

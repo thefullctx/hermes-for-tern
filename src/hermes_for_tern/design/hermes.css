@@ -27,6 +27,9 @@
   --hft-gap: calc(0.75 * var(--hft-lh));
   --hft-mono: var(--tv-font, var(--mono, ui-monospace, monospace));
   --hft-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* the pen: one stroke's ease, shared by everything Hermes draws on. Tern resolves no var() in
+     an animation inside an image, so the SVGs repeat this curve. */
+  --hft-pen: cubic-bezier(0.55, 0, 0.3, 1);
   --sf-accent: var(--hft-gold);
   --sf-c-accent: var(--hft-gold);
 }
@@ -214,7 +217,7 @@
   content: ''; position: absolute; left: calc(var(--hft-cw) - var(--hft-gut) - 0.5px);
   top: calc(10px + var(--hft-lh)); bottom: calc(var(--hft-lh) - 4px); width: 1px; pointer-events: none;
   background: linear-gradient(180deg, var(--hft-line), var(--hft-line) 80%, transparent);
-  transform-origin: top; animation: hft-draw 900ms var(--hft-out) both; }
+  transform-origin: top; animation: hft-draw 900ms var(--hft-pen) both; }
 .sf.sf-col[data-role='turn'][data-tone='pending']::before {
   background: linear-gradient(180deg, var(--hft-gold-line), var(--hft-gold) 70%, transparent);
   box-shadow: 0 0 6px light-dark(#805c2033, #d5b47544); }
@@ -236,6 +239,29 @@
   -stencil-particles: particles(sparks, 24, 24, 1200ms, 70); -stencil-time: 0s;
   animation: hft-sparks 1.2s linear 500ms both; }
 @keyframes hft-sparks { from { -stencil-time: 0s; } to { -stencil-time: 1.2s; } }
+/* Hermes signs: its H in the wordmark's pen. Tern styles an image only from inside it, so each use
+   is its own copy (hft-mono-signed, -dry, -errands, -pen) and these selectors stay within the SVG.
+   The latest delivered turn is signed as the glint passes, and its ink dries to faint with the next
+   turn; a finished errands pill is signed too. */
+.sf.sf-row[data-role='delivered-line'] { align-items: center; gap: 8px; }
+:is([data-role$='signature'], [data-role='working-pen']) .sf-img-svg { overflow: visible; }
+.hft-mono-ink path { stroke: var(--hft-gold); stroke-dasharray: 1 2; stroke-dashoffset: 0; }
+.hft-mono-dry .hft-mono-ink path { stroke: var(--hft-faint); }
+.hft-mono-signed .hft-mono-ink path { animation: hft-write 240ms cubic-bezier(0.55, 0, 0.3, 1) 1100ms both; }
+.hft-mono-signed .hft-mono-ink .hft-mono-2 { animation-duration: 180ms; animation-delay: 1280ms; }
+.hft-mono-signed .hft-mono-ink .hft-mono-3 { animation-delay: 1400ms; }
+.hft-mono-errands .hft-mono-ink path { animation: hft-write 220ms cubic-bezier(0.55, 0, 0.3, 1) 450ms both; }
+.hft-mono-errands .hft-mono-ink .hft-mono-2 { animation-duration: 160ms; animation-delay: 620ms; }
+.hft-mono-errands .hft-mono-ink .hft-mono-3 { animation-delay: 730ms; }
+/* musing: while Hermes thinks in silence the H writes, holds and lifts over its faint ghost */
+.hft-mono-pen .hft-mono-ghost { stroke: var(--hft-gold); stroke-opacity: 0.2; }
+.hft-mono-pen .hft-mono-ink path { animation: hft-pen-loop 2600ms cubic-bezier(0.55, 0, 0.3, 1) infinite both; }
+.hft-mono-pen .hft-mono-ink .hft-mono-2 { animation-delay: 250ms; }
+.hft-mono-pen .hft-mono-ink .hft-mono-3 { animation-delay: 500ms; }
+@keyframes hft-pen-loop {
+  0% { stroke-dashoffset: 1; opacity: 0; } 2% { opacity: 1; }
+  30%, 70% { stroke-dashoffset: 0; opacity: 1; }
+  90%, 100% { stroke-dashoffset: 0; opacity: 0; } }
 @keyframes hft-glint { from { background-position: 100% 0%; } to { background-position: 0% 0%; } }
 
 /* ---------- thoughts: reasoning in faint gold ink; when the answer starts it fades and folds
@@ -303,6 +329,10 @@
 /* ---------- undelivered: a failed turn, its code beside the title, and a gold retry key */
 .sf.sf-card[data-role='undelivered'] > .sf-card-head .sf-t-dim {
   font-weight: 400; color: color-mix(in srgb, var(--hft-bad) 60%, var(--hft-faint)); }
+.sf.sf-card[data-role='undelivered'] > .sf-card-head .sf-head {
+  flex: none; padding-bottom: 1px; background-image: linear-gradient(var(--hft-bad), var(--hft-bad));
+  background-repeat: no-repeat; background-position: 0% 100%; background-size: 100% 1px;
+  animation: hft-ink-line 700ms var(--hft-pen) 150ms both; }
 .sf.sf-card[data-role='undelivered'] > .sf-card-body { gap: 8px; }
 .sf.sf-card[data-role='undelivered'] .sf-text { white-space: pre-wrap; color: var(--hft-muted); }
 
@@ -319,7 +349,7 @@
   border-radius: 0; background-color: transparent; color: var(--hft-gold);
   background-image: linear-gradient(var(--hft-gold), var(--hft-gold)); background-repeat: no-repeat;
   background-position: 0% 100%; background-size: 100% 1px;
-  animation: hft-ink-line 900ms var(--hft-out) 250ms both; }
+  animation: hft-ink-line 700ms var(--hft-pen) 250ms both; }
 @keyframes hft-ink-line { from { background-size: 0% 1px; } to { background-size: 100% 1px; } }
 
 /* ---------- dispatches: short notes above the composer that rise in and fade away */
@@ -561,7 +591,8 @@
 .sf-still [data-role^='errand'], .sf-still [data-role='thought-folding'] > .sf-section-body,
 .sf-still [data-role='turn']::before, .sf-still [data-role='delivered'],
 .sf-still [data-role='search-hit'] .sf-t-mark, .sf-still .hft-dispatch,
-.sf-still [data-role='bar'] .sf-seg { animation: none; }
+.sf-still [data-role='bar'] .sf-seg,
+.sf-still .sf.sf-card[data-role='undelivered'] > .sf-card-head .sf-head { animation: none; }
 .sf-still [data-role='canvas'] .sf-tool-ic::after, .sf-still [data-role='composer']::after,
 .sf-still [data-role='delivered']::after { display: none; }
 @media (prefers-reduced-motion: reduce) {
@@ -573,7 +604,9 @@
   .sf.sf-section[data-role='thought-folding'] > .sf-section-body,
   .sf.sf-col[data-role='turn']::before, .sf.sf-text[data-role='delivered'],
   .sf.sf-text[data-role='search-hit'] .sf-t-mark, .sf.sf-el.hft-dispatch, .sf.sf-el.hft-dispatch.leaving,
-  [data-role='bar'] .sf-seg[data-role='send'] { animation: none; }
+  [data-role='bar'] .sf-seg[data-role='send'],
+  .hft-word-ghost, .hft-word-ink path, .hft-mono .hft-mono-ink path,
+  .sf.sf-card[data-role='undelivered'] > .sf-card-head .sf-head { animation: none; }
   .sf.sf-col[data-role='canvas'] .sf-tool-ic::after, .sf.sf-editor[data-role='composer']::after,
   .sf.sf-text[data-role='delivered']::after { display: none; }
   .sf.sf-tool[data-role='tool'].st-cancelled { opacity: 0.6; }

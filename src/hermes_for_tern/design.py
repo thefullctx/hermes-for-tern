@@ -42,10 +42,22 @@ LIGHT = {
 }
 
 
+# Hermes's H, once per use: Tern styles an image only from inside it, so the use is named there.
+MONOGRAM_USES = ("signed", "dry", "errands", "pen")
+
+
+def images() -> dict[str, bytes]:
+    """The SVGs to send, by asset name."""
+    found = {name: ASSETS.joinpath(f"{name}.svg").read_bytes() for name in ("hermes", "wordmark")}
+    monogram = ASSETS.joinpath("monogram.svg").read_text()
+    for use in MONOGRAM_USES:
+        found[f"monogram-{use}"] = monogram.replace(
+            'class="hft-mono"', f'class="hft-mono hft-mono-{use}"'
+        ).encode()
+    return found
+
+
 def send_assets(session) -> dict[str, str]:
     if "image" not in session.caps.kinds or not session.caps.has("blobs"):
         return {}
-    return {
-        name: session.blob(ASSETS.joinpath(f"{name}.svg").read_bytes(), "image/svg+xml")
-        for name in ("hermes", "wordmark")
-    }
+    return {name: session.blob(data, "image/svg+xml") for name, data in images().items()}

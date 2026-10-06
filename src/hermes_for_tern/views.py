@@ -249,7 +249,9 @@ def dispatches(notes: list[Dispatch]):
     )
 
 
-def transcript_row(row: Row, state: Conversation, retry: Callable | None = None):
+def transcript_row(
+    row: Row, state: Conversation, retry: Callable | None = None, assets: dict[str, str] | None = None
+):
     if row.kind == "thought":
         return thought(row, state)
     if row.kind == "errands":
@@ -307,7 +309,16 @@ def transcript_row(row: Row, state: Conversation, retry: Callable | None = None)
     if row.kind == "delivered":
         # A long turn earns a few sparks; the stylesheet keys them on the tone.
         long = (row.duration or 0) >= LONG_TURN
-        return ui.text(row.text, role="delivered", tone="accent" if long else None, key=row.key)
+        note = ui.text(row.text, role="delivered", tone="accent" if long else None, key=row.key)
+        # Hermes signs the delivered turn: its H writes itself in as the glint passes, and its ink
+        # dries to faint once the next turn begins.
+        latest = not state.busy and row is next(
+            (r for r in reversed(state.rows) if r.kind == "delivered"), None
+        )
+        signed = signature(assets, "signed" if latest else "dry", 12, role="signature")
+        if not signed:
+            return note
+        return ui.row(note, signed, role="delivered-line", key=f"{row.key}-signed")
     return ui.text(row.text, role="notice", key=row.key)
 
 
@@ -385,6 +396,22 @@ def brand_image(assets: dict[str, str], name: str, size: int, *, key: str, role:
     return ui.icon("sparkle", tone="accent", key=key, role=role)
 
 
+def signature(assets: dict[str, str] | None, use: str, height: int, *, role: str, key: str = "signature"):
+    """Hermes's H in the wordmark's pen, in its copy for `use` (see design.MONOGRAM_USES); none
+    without images."""
+    if not assets or f"monogram-{use}" not in assets:
+        return None
+    return ui.image(
+        assets[f"monogram-{use}"],
+        w=round(height * 0.75),
+        h=height,
+        alt="",
+        key=key,
+        role=role,
+        on_click=lambda _: None,
+    )
+
+
 def wordmark(assets: dict[str, str]):
     """HERMES, written in stroke by stroke over its own faint ghost; plain text without images."""
     if "wordmark" in assets:
@@ -394,8 +421,8 @@ def wordmark(assets: dict[str, str]):
     return ui.html.h1("Hermes", class_="hft-wordmark", key="wordmark")
 
 
-def errand_pill(todos: list[dict]):
-    """The turn's errands as a pill: a gold ring that fills as they are done."""
+def errand_pill(todos: list[dict], assets: dict[str, str] | None = None):
+    """The turn's errands as a pill: a gold ring that fills as they are done, signed once all are."""
     done, total, current = progress(todos)
     if not total:
         return None
@@ -404,23 +431,32 @@ def errand_pill(todos: list[dict]):
         ui.meter(done / total, style="ring", size="sm", key="ring"),
         ui.text([ui.span("errands ", "muted"), ui.span(f"{done}/{total}")], key="count"),
         ui.text("all delivered" if finished else current[:60], key="now"),
+        signature(assets, "errands", 11, role="errands-signature") if finished else None,
         gap="sm",
         role="errands-done" if finished else "errands",
         key="errands",
     )
 
 
-def working(state: Conversation, label: str):
-    """One console line: a spinner, what Hermes is doing, how long the turn has run, its errands."""
+def working(state: Conversation, label: str, assets: dict[str, str] | None = None):
+    """One console line: a spinner, what Hermes is doing, how long the turn has run, its errands.
+    While Hermes muses in silence the spinner gives way to the pen, writing its H over and over."""
     waiting = bool(state.questions)
     started = state.turn_started or time.monotonic()
+    done, total, _ = progress(state.todos)
+    # one write-on at a time: the errands' signature outranks the working mark
+    pen = signature(assets, "pen", 13, role="working-pen", key="pen")
+    if waiting:
+        mark = ui.text("◆", key="mark", role="working-still")
+    elif pen and state.musing and not (total and done == total):
+        mark = pen
+    else:
+        mark = ui.spinner(style="braille", key="mark")
     return ui.row(
-        ui.text("◆", key="mark", role="working-still")
-        if waiting
-        else ui.spinner(style="braille", key="mark"),
+        mark,
         ui.text(label, key="label") if waiting else ui.shimmer(label, key="label"),
         ui.elapsed(max(0, (time.monotonic() - started) * 1000), key="clock"),
-        errand_pill(state.todos) if state.busy else None,
+        errand_pill(state.todos, assets) if state.busy else None,
         gap="sm",
         role="activity",
         key="working",
@@ -449,7 +485,7 @@ def view(
         if row.visible or row.kind in ("tool", "errands"):
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
-            turns[-1][1].append(transcript_row(row, state, retry))
+            turns[-1][1].append(transcript_row(row, state, retry, assets))
     welcome = not turns
     rows: list = []
     if welcome:
@@ -510,7 +546,7 @@ def view(
         activity = {"Thinking": "Working", "Writing": "Writing", "terminal": "Running terminal"}.get(
             state.activity, state.activity.replace("_", " ")
         )
-        dock.append(working(state, "Waiting for your answer" if state.questions else activity))
+        dock.append(working(state, "Waiting for your answer" if state.questions else activity, assets))
     fuel = state.usage.get("context_percent")
     fuel = fuel if isinstance(fuel, (int, float)) and not isinstance(fuel, bool) else None
     if fuel is not None:
