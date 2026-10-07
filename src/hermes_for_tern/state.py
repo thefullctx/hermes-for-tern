@@ -23,6 +23,20 @@ MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.
 DISPATCH = 6.0
 LEAVE = 0.6
+# How many follow-ups can be held while a turn runs; past this the oldest is dropped.
+QUEUE = 8
+
+
+# Thinking effort, in the order the button steps: a ring fills as it rises.
+EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+# How long the level's name floats after a press before it goes away.
+EFFORT_NOTICE = 1.6
+
+
+def supported_efforts(model: Any) -> tuple[str, ...]:
+    """The levels the ring steps through. Hermes is asked first when it answers; until it
+    does, every level the protocol knows is offered."""
+    return EFFORTS
 
 
 def delivered(seconds: float, usage: dict) -> str:
@@ -30,9 +44,10 @@ def delivered(seconds: float, usage: dict) -> str:
     took = f"{seconds:.1f}s" if seconds < 60 else f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
     tokens = usage.get("total")
     if isinstance(tokens, int) and tokens:
-        return f"delivered · {took} · " + (
-            f"{tokens / 1000:.1f}K tokens" if tokens >= 1000 else f"{tokens} tokens"
-        )
+        count = f"{tokens / 1000:.1f}K tokens" if tokens >= 1000 else f"{tokens} tokens"
+        # A rate over a sub-second turn would be noise pretending to be a measurement.
+        pace = f" · {tokens / seconds:.0f} tok/s" if seconds >= 1.0 else ""
+        return f"delivered · {took} · {count}{pace}"
     return f"delivered · {took}"
 
 
@@ -228,6 +243,12 @@ class Conversation:
         self._paced_at = time.monotonic()
         self.heard = time.monotonic()  # when Hermes last sent anything but usage
         self.musing = False
+        # Follow-ups composed while Hermes works, sent the moment the turn ends.
+        self.queued: list[str] = []
+        # Thinking effort: the level the ring shows, and when its name last floated.
+        self.effort: str = "off"
+        self.effort_notice: float | None = None
+        self.effort_presses: int = 0
 
     def touch(self) -> None:
         self.revision += 1
@@ -251,6 +272,60 @@ class Conversation:
         self.turn_started = time.monotonic()
         self.heard = self.turn_started
         self.touch()
+
+    def queue(self, text: str) -> None:
+        """Hold a follow-up to send the moment the turn ends: you think of it while Hermes works."""
+        text = text.strip()
+        if text:
+            self.queued.append(text)
+            del self.queued[:-QUEUE]
+            self.touch()
+
+    def take_queued(self) -> str | None:
+        return self.queued.pop(0) if self.queued else None
+
+    def clear(self) -> None:
+        """Empty the transcript in place; the session and the backend's own history carry on."""
+        self.rows.clear()
+        self.tools.clear()
+        self.agents.clear()
+        self.todos.clear()
+        self.dispatches.clear()
+        self._away.clear()
+        self._assistant = None
+        self._turn_assistants.clear()
+        self._errands = None
+        self._thought = None
+        self.usage = {}
+        self.touch()
+
+    def cost(self) -> str:
+        """What the session has spent, as far as Hermes reports it."""
+        parts = []
+        for key in ("cost", "total_cost"):
+            value = self.usage.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                parts.append(f"${value:.4f}".rstrip("0").rstrip("."))
+        total = self.usage.get("total")
+        if isinstance(total, int) and total:
+            parts.append(f"{total / 1000:.1f}K tokens" if total >= 1000 else f"{total} tokens")
+        fuel = self.usage.get("context_percent")
+        if isinstance(fuel, (int, float)) and not isinstance(fuel, bool):
+            parts.append(f"{fuel:.0f}% context")
+        return " · ".join(parts) or "Hermes has not reported any usage yet."
+
+    def cycle_effort(self) -> str:
+        """Step to the next level this model supports and float its name; returns the new level."""
+        levels = supported_efforts(self.info.get("model"))
+        index = levels.index(self.effort) if self.effort in levels else -1
+        self.effort = levels[(index + 1) % len(levels)]
+        self.effort_notice = time.monotonic() + EFFORT_NOTICE
+        self.effort_presses += 1
+        self.touch()
+        return self.effort
+
+    def effort_notice_live(self, now: float) -> bool:
+        return self.effort_notice is not None and self.effort_notice > now
 
     def pace(self, now: float) -> None:
         """Reveal streamed text smoothly, however bursty its arrival."""
@@ -282,6 +357,9 @@ class Conversation:
         before = [(d.key, d.leaving(now)) for d in self.dispatches]
         self.dispatches = [d for d in self.dispatches if not d.gone(now)]
         if [(d.key, d.leaving(now)) for d in self.dispatches] != before:
+            self.touch()
+        if self.effort_notice is not None and not self.effort_notice_live(now):
+            self.effort_notice = None
             self.touch()
 
     def assistant(self) -> Row:
@@ -575,3 +653,6 @@ class Conversation:
 
     def clarify(self) -> Question | None:
         return next((q for q in self.questions.values() if q.method == "clarify"), None)
+
+    def approval(self) -> Question | None:
+        return next((q for q in self.questions.values() if q.method == "approval"), None)

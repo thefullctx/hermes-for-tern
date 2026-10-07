@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import queue
+import shlex
 import time
 from concurrent.futures import Future
 from pathlib import Path
 
+import tern_sdk
 from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent, VisibleEvent
 
 from .editor import Draft
@@ -14,6 +16,12 @@ from .rpc import Backend
 from .state import Conversation, Question
 from .design import CSS, DARK, LIGHT, send_assets
 from .views import view
+
+# Keys that pick a question's choice, in the order the card shows them.
+DIGITS = "123456789"
+# What the composer can be told to do, all handled here rather than sent to the model.
+COMMANDS = ("/help", "/clear", "/cost", "/retry", "/doctor", "/stop", "/quit", "/exit")
+HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit"
 
 
 class App:
@@ -64,7 +72,7 @@ class App:
                         and not self.state.failed
                         and time.monotonic() > self.start_deadline
                     ):
-                        self.fail("Hermes took too long to start. Exit and run hermes-for-tern --doctor.")
+                        self.fail("Hermes took too long to start. Type /doctor for the details.")
                     item = self.session.poll(0.02)
                     if item is not None:
                         self.input(item)
@@ -103,6 +111,7 @@ class App:
                 self.submit,
                 self.assets,
                 self.retry,
+                self.cycle_effort,
             )
         )
         if self.backend:
@@ -144,9 +153,14 @@ class App:
                     self.request("client.capabilities", {"server_requests": True})
                 else:
                     old_question = self.state.clarify()
+                    busy = self.state.busy
                     self.state.event(kind, params.get("payload") or {})
                     if old_question and old_question is not self.state.clarify():
                         self.answer_draft = Draft()
+                    if busy and not self.state.busy and self.state.queued:
+                        held = self.state.take_queued()
+                        if held:
+                            self.submit(held)
             elif "method" in frame and "id" in frame:
                 self.server_request(frame)
 
@@ -265,6 +279,10 @@ class App:
             self.state.activity = "Stopping"
             self.state.touch()
 
+    def cycle_effort(self) -> None:
+        """The ring was pressed: think a little deeper, or not, from the next turn on."""
+        self.state.cycle_effort()
+
     def suggest(self, text: str) -> None:
         self.draft = Draft(text, len(text))
         self.state.touch()
@@ -285,23 +303,96 @@ class App:
                 self.answer_question(question, answer)
             return
         text = self.draft.text if text is None else text
-        if not text.strip() and self.state.can_retry:
-            self.retry()
+        if not text.strip():
+            if self.state.can_retry:
+                self.retry()
             return
-        if text.strip() in ("/quit", "/exit"):
+        if text.strip().startswith("/"):
+            self.run_command(text.strip())
+            if text.strip() != "/stop":
+                self.draft = Draft()
+            return
+        if not self.state.ready or self.state.failed:
+            return
+        if self.state.busy:
+            # Hermes is still working; hold the thought rather than dropping it on the floor.
+            self.state.queue(text)
+            self.draft = Draft()
+            return
+        self.state.begin(text)
+        self.draft = Draft()
+        self.request("prompt.submit", self.scoped(text=text))
+
+    def run_command(self, text: str) -> None:
+        """One of COMMANDS, answered here; anything else starting with `/` is not one."""
+        if text in ("/quit", "/exit"):
             self.exit = True
-        elif text.strip() == "/stop":
+        elif text == "/stop":
             self.stop()
             self.draft = Draft()
-        elif self.state.ready and not self.state.busy and not self.state.failed and text.strip():
-            if text.startswith("/"):
-                self.state.add(
-                    "notice", "Slash commands are not supported yet. Use plain prompts, /stop or /quit."
-                )
-                return
-            self.state.begin(text)
-            self.draft = Draft()
-            self.request("prompt.submit", self.scoped(text=text))
+        elif text == "/help":
+            self.state.add("notice", HELP)
+        elif text == "/clear":
+            self.state.clear()
+            self.state.add("notice", "Transcript cleared. Hermes still remembers this session.")
+        elif text == "/cost":
+            self.state.add("notice", self.state.cost())
+        elif text == "/doctor":
+            self.doctor()
+        elif text == "/retry":
+            if self.state.can_retry:
+                self.retry()
+            else:
+                self.state.add("notice", "Nothing to retry.")
+        else:
+            self.state.add("notice", f"{text} is not a command. Try {', '.join(COMMANDS[:6])} or /help.")
+
+    def doctor(self) -> None:
+        """What `--doctor` prints on the terminal, said here so it is never a dead end."""
+        from . import launcher
+
+        lines = []
+        try:
+            config = launcher.settings()
+            original = launcher.original_command(config)
+            lines.append(("hermes", original))
+            lines.append(("backend", shlex.join(launcher.backend_command(original, config))))
+            lines.append(("wrapper", str(config.get("target", "not installed"))))
+        except (OSError, RuntimeError, ValueError) as exc:
+            lines.append(("launcher", str(exc)))
+        lines.append(("protocol", str(getattr(tern_sdk.wire, "VERSION", "?"))))
+        lines.append(("session", self.state.session_id or "none"))
+        lines.append(("project", str(self.cwd)))
+        lines.append(("state", f"ready={self.state.ready} busy={self.state.busy}"))
+        for name, value in lines:
+            self.state.add("notice", f"{name}: {value}")
+
+    def choose_by_key(self, item) -> bool:
+        """A pending question answers to the keyboard: digits pick, Enter takes the likely one,
+        Esc denies. Returns True when the key was a choice and so must not reach the draft."""
+        if item.ctrl or item.alt or item.meta:
+            return False
+        approval = self.state.approval()
+        if approval is not None:
+            choices = approval.params.get("choices") or ["deny"]
+            if item.name in DIGITS and DIGITS.index(item.name) < len(choices):
+                self.approve(approval.rid, choices[DIGITS.index(item.name)])
+            elif item.name == "enter":
+                self.approve(approval.rid, "once" if "once" in choices else choices[0])
+            elif item.name == "escape":
+                self.approve(approval.rid, "deny" if "deny" in choices else choices[-1])
+            else:
+                return False
+            return True
+        question = self.state.clarify()
+        # Digits type a number into the answer draft once one is started, so only claim
+        # them while the draft is still empty.
+        if question is not None and not self.answer_draft.text and item.name in DIGITS:
+            choices = question.current.get("choices") or []
+            if DIGITS.index(item.name) < len(choices):
+                self.choose(question.rid, choices[DIGITS.index(item.name)])
+                return True
+        return False
 
     def input(self, item) -> None:
         draft = self.answer_draft if self.state.clarify() else self.draft
@@ -315,6 +406,8 @@ class App:
                     draft.replace(0, len(draft.text), "")
                 else:
                     self.exit = True
+            elif self.choose_by_key(item):
+                pass
             elif item.name == "escape":
                 self.stop()
             elif item.name == "enter" and not (item.shift or item.alt):

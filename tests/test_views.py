@@ -1,10 +1,11 @@
+import time
 from pathlib import Path
 
 from tern_sdk.reconcile import View
 
 from hermes_for_tern.editor import Draft
-from hermes_for_tern.state import Conversation
-from hermes_for_tern.views import trail, view
+from hermes_for_tern.state import EFFORTS, Conversation, Question
+from hermes_for_tern.views import CLIP, trail, view
 
 
 def noop(*args):
@@ -152,3 +153,131 @@ def test_the_pen_replaces_the_spinner_only_while_hermes_muses_and_errands_are_un
     state.event("todo.updated", {"todos": [{"id": "1", "content": "Look", "status": "completed"}]})
     state.musing = True
     assert signatures(state, assets) == {"errands-signature": "errands"}
+
+
+def build(state, draft=None, effort=None):
+    return View.build(
+        view(
+            state,
+            draft or Draft(),
+            Draft(),
+            Path("/project"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            effort=effort,
+        )
+    )
+
+
+def ids_with_role(built, role):
+    return [
+        node["id"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("role") == role
+    ]
+
+
+def lamps(built):
+    """The floating lamp that names the pressed effort level."""
+    return [
+        node["id"]
+        for node in (n.wire() for n in built.nodes().values())
+        if "hft-effort" in node.get("p", {}).get("class", "")
+    ]
+
+
+def icon_name(built):
+    return next(
+        node["p"]["name"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node["k"] == "icon" and node["id"].startswith("layer.dispatches")
+    )
+
+
+def test_a_held_follow_up_is_shown_in_the_dock_and_counted():
+    state = Conversation()
+    state.ready = True
+    state.begin("first")
+    state.queue("and then this")
+    state.queue("last thing")
+    built = build(state)
+    assert ids_with_role(built, "queued") == ["dock.queued-0.queued", "dock.queued-1.queued"]
+    counts = [
+        node["p"]["text"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("role") == "depth"
+    ]
+    assert sorted(counts) == ["1/2", "2/2"]
+
+
+def test_the_queue_hint_only_appears_while_hermes_is_actually_working():
+    state = Conversation()
+    state.ready = True
+    state.begin("first")
+    assert not ids_with_role(build(state), "queued-hint")
+    built = build(state, Draft("another thought"))
+    assert ids_with_role(built, "queued-hint") == ["dock.queued-hint"]
+
+
+def test_every_offered_choice_is_numbered_on_its_button():
+    state = Conversation()
+    state.session_id = "live"
+    state.questions["r1"] = Question("r1", "approval", {"choices": ["once", "session", "deny"]})
+    built = build(state)
+    hints = sorted(
+        node["p"]["text"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("class") == "hft-hint"
+    )
+    assert hints == ["1", "2", "3"]
+
+
+def test_a_tool_body_past_the_clip_says_how_much_it_left_out():
+    state = Conversation()
+    state.begin("go")
+    state.event("tool.complete", {"tool_id": "t", "name": "terminal", "result": {"output": "x" * 12}})
+    assert not ids_with_role(build(state), "clipped")
+    state.event(
+        "tool.complete", {"tool_id": "u", "name": "terminal", "result": {"output": "y" * (CLIP + 250)}}
+    )
+    note = ids_with_role(build(state), "clipped")
+    assert note == ["main.canvas.r1.r3.clipped.clip"]
+    text = next(n.wire()["p"]["text"] for n in build(state).nodes().values() if n.wire()["id"] == note[0])
+    assert "250 more characters" in text
+
+
+def test_the_effort_ring_sits_beside_the_model_and_steps_through_every_level():
+    state = Conversation()
+    assert EFFORTS == ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+    seen = []
+    for _ in range(len(EFFORTS) + 1):
+        ring = next(
+            n.wire()
+            for n in build(state, effort=lambda: None).nodes().values()
+            if n.wire().get("p", {}).get("role") == "effort"
+        )
+        assert ring["k"] == "effort"
+        assert ring["p"]["actions"] == {"click": "click"}
+        seen.append(ring["p"]["level"])
+        state.cycle_effort()
+    # One full loop and back to where it started.
+    assert seen[1:] == list(EFFORTS[1:]) + [EFFORTS[0]]
+    assert seen[-1] == EFFORTS[0]
+
+
+def test_the_pressed_level_floats_with_a_lamp_then_goes_away_itself():
+    state = Conversation()
+    assert lamps(build(state)) == []
+    state.cycle_effort()
+    assert lamps(build(state)) == ["layer.dispatches.effort-1"]
+    assert icon_name(build(state)) == "lightbulb"
+    # A second press re-keys it, so the same level can show again.
+    state.cycle_effort()
+    assert lamps(build(state)) == ["layer.dispatches.effort-2"]
+    state.effort_notice = time.monotonic() - 1
+    state.pace(time.monotonic())
+    assert state.effort_notice is None
+    assert lamps(build(state)) == []

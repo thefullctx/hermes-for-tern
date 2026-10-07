@@ -16,13 +16,25 @@ from .state import Agent, Conversation, Dispatch, Question, Row
 MARKUP = set("*_`[]()#<>|~\\\n")
 # Seconds of work after which a delivered turn is celebrated, quietly.
 LONG_TURN = 60
+# Tool output past this is clipped for the pane; the row says so rather than lying by omission.
+CLIP = 48000
 
 
 def button(
-    label: str, fn: Callable, *, primary: bool = False, disabled: bool = False, key: str | None = None
+    label: str,
+    fn: Callable,
+    *,
+    primary: bool = False,
+    disabled: bool = False,
+    key: str | None = None,
+    hint: str | None = None,
 ):
+    """A key is a button; `hint` is the digit that answers it without the mouse."""
+    children = [ui.html.span(label, key="label")]
+    if hint:
+        children.insert(0, ui.html.span(hint, class_="hft-hint", key="hint"))
     return ui.html.button(
-        label,
+        *children,
         class_="hft-button" + (" hft-primary" if primary else "") + (" hft-disabled" if disabled else ""),
         on_click=(lambda _: fn()) if not disabled else None,
         attrs={"aria-disabled": disabled},
@@ -228,10 +240,23 @@ def undelivered(row: Row, state: Conversation, retry: Callable | None):
     )
 
 
-def dispatches(notes: list[Dispatch]):
-    """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade."""
+def effort_notice(level: str, key: str):
+    """The pressed effort, floating like a dispatch but with a lamp rather than a seal."""
+    return ui.html.div(
+        ui.icon("lightbulb", tone="accent", key="mark"),
+        ui.html.span("thinking effort", class_="hft-dispatch-title", key="title"),
+        ui.html.span(level, class_="hft-dispatch-text", key="level"),
+        class_="hft-dispatch hft-effort",
+        key=key,
+    )
+
+
+def dispatches(notes: list[Dispatch], effort: tuple[str, str] | None = None):
+    """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade.
+    `effort` is (level, key) for the lamp that shows the pressed thinking effort."""
     now = time.monotonic()
     return ui.html.div(
+        *((effort_notice(*effort),) if effort else ()),
         *(
             ui.html.div(
                 ui.html.span("☤", class_="hft-dispatch-mark", key="mark"),
@@ -249,6 +274,23 @@ def dispatches(notes: list[Dispatch]):
     )
 
 
+def clipped_output(row: Row):
+    """A tool's output, with a line saying how much was left out when there is any."""
+    code = ui.code(row.text[:CLIP], wrap=True, key="output")
+    if len(row.text) <= CLIP:
+        return code
+    return ui.col(
+        code,
+        ui.text(
+            f"└─ {len(row.text) - CLIP:,} more characters not shown",
+            tone="muted",
+            role="clipped",
+            key="clip",
+        ),
+        key="clipped",
+    )
+
+
 def transcript_row(
     row: Row, state: Conversation, retry: Callable | None = None, assets: dict[str, str] | None = None
 ):
@@ -257,9 +299,7 @@ def transcript_row(
     if row.kind == "errands":
         return errand_list(row)
     if row.kind == "tool":
-        body = (
-            ui.diff(row.diff, key="diff") if row.diff else ui.code(row.text[:48000], wrap=True, key="output")
-        )
+        body = ui.diff(row.diff, key="diff") if row.diff else clipped_output(row)
         running = row.status == "running"
         if row.agents:
             body = delegation(row)
@@ -346,8 +386,9 @@ def approval_card(question: Question, answer: Callable):
                     lambda choice=c: answer(question.rid, choice),
                     primary=c == "once",
                     key=c,
+                    hint=f"{index + 1}",
                 )
-                for c in choices
+                for index, c in enumerate(choices)
             ),
             class_="hft-actions",
             key="buttons",
@@ -366,7 +407,13 @@ def clarification_card(question: Question, choose: Callable, skip: Callable):
         selected = choice in question.selected
         label = ("✓ " if selected else "") + choice
         controls.append(
-            button(label, lambda c=choice: choose(question.rid, c), primary=selected, key=f"c{index}")
+            button(
+                label,
+                lambda c=choice: choose(question.rid, c),
+                primary=selected,
+                key=f"c{index}",
+                hint=f"{index + 1}",
+            )
         )
     if current.get("multi_select"):
         controls.append(button("Continue", lambda: choose(question.rid, None), primary=True, key="continue"))
@@ -374,7 +421,7 @@ def clarification_card(question: Question, choose: Callable, skip: Callable):
     return ui.card(
         ui.md(str(current.get("question", "")), key="question"),
         ui.html.div(*controls, class_="hft-actions", key="buttons"),
-        ui.text("Choose an option, or type your answer below.", tone="muted", key="hint"),
+        ui.text("Choose with a number key, or type your answer below.", tone="muted", key="hint"),
         head=f"Question {question.index + 1} of {len(question.params.get('questions', []))}",
         variant="bare",
         role="clarification",
@@ -476,6 +523,7 @@ def view(
     submit: Callable | None = None,
     assets: dict[str, str] | None = None,
     retry: Callable | None = None,
+    effort: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
@@ -566,8 +614,9 @@ def view(
             else "Draft your next message…"
             if state.busy
             else "What would you like to work on?",
-            readonly=state.failed,
-            sendable=state.ready and not state.busy,
+            # Not readonly on failure: /doctor and /quit must still be typeable.
+            readonly=False,
+            sendable=state.ready and (not state.busy or bool(clarification)),
             max_lines=8,
             prompt=[ui.span("❯ ", "accent")],
         )
@@ -580,7 +629,9 @@ def view(
     )
     if state.busy and not clarification:
         action = ui.seg("esc stop", side="right", role="stop", key="action", on_click=lambda _: stop())
+        queueable = bool(active_draft.text.strip()) and state.ready and not state.failed
     else:
+        queueable = False
         send = submit or (lambda: None)
         action = ui.seg(
             "⏎ answer" if clarification else "⏎ send",
@@ -589,12 +640,43 @@ def view(
             key="action",
             on_click=(lambda _: send()) if can_send else None,
         )
+    if queueable:
+        dock.insert(
+            0,
+            ui.text(
+                [ui.span("⏎ holds this for when the turn ends", "muted")],
+                role="queued-hint",
+                key="queued-hint",
+            ),
+        )
+    for index, held in enumerate(state.queued):
+        dock.insert(
+            index,
+            ui.row(
+                ui.text(
+                    [ui.span("queued · ", "accent"), ui.span(held[:80], "muted")],
+                    role="queued",
+                    key="queued",
+                ),
+                ui.text(f"{index + 1}/{len(state.queued)}", tone="muted", role="depth", key="depth"),
+                role="queued-line",
+                key=f"queued-{index}",
+            ),
+        )
     usage = state.usage.get("total") or 0
     dock.append(
         ui.status(
             ui.seg("hermes", role="brand", key="brand"),
             ui.seg("SIMULATED DEMO", role="demo", key="demo") if state.info.get("demo") else None,
             ui.seg(model, icon="brain", key="model"),
+            # The ring fills as thinking gets deeper; press it to step on.
+            ui.effort(
+                state.effort,
+                role="effort",
+                key="effort",
+                on_click=(lambda _: effort()) if effort else None,
+                title=f"thinking effort: {state.effort}",
+            ),
             ui.seg(cwd.name, icon="folder", key="project"),
             ui.seg(f"{usage:,} tokens", side="right", key="usage")
             if isinstance(usage, int) and usage
@@ -628,7 +710,14 @@ def view(
         ),
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
-            dispatches(state.dispatches) if state.dispatches else None,
+            dispatches(
+                state.dispatches,
+                (state.effort, f"effort-{state.effort_presses}")
+                if state.effort_notice_live(time.monotonic())
+                else None,
+            )
+            if state.dispatches or state.effort_notice_live(time.monotonic())
+            else None,
         ),
         "dock": ui.col(*dock, gap="none"),
     }

@@ -153,6 +153,21 @@
 .hft-button.hft-disabled, .hft-button.hft-disabled:hover {
   opacity: 0.45; cursor: default; background: none; transform: none; }
 
+/* the digit that answers a card without the mouse */
+.hft-button .hft-hint { margin-right: 7px; color: var(--hft-faint); }
+.hft-button.hft-primary .hft-hint { color: var(--hft-gold); opacity: 0.65; }
+
+/* ---------- held follow-ups: what ⏎ will send when this turn ends */
+.sf.sf-text[data-role='queued-hint'] { color: var(--hft-faint); line-height: var(--hft-lh); }
+.sf.sf-row[data-role='queued-line'] { align-items: baseline; gap: calc(0.5 * var(--hft-cw)); }
+.sf.sf-row[data-role='queued-line'] [data-role='queued'] {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sf.sf-row[data-role='queued-line'] .sf-text[data-role='depth'] { flex: 0 0 auto; }
+
+/* ---------- a clipped tool body says so, in the tree's own voice */
+.sf.sf-col[data-role='clipped'] { gap: 0; }
+.sf.sf-text[data-role='clipped'] { color: var(--hft-faint); line-height: var(--hft-lh); }
+
 /* ---------- tools: no frame; ● in the gutter carries the status */
 .sf.sf-tool[data-role='tool'] {
   padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; overflow: visible; }
@@ -373,6 +388,13 @@
 .sf.sf-el.hft-dispatch.tone-warn .hft-dispatch-title { color: var(--hft-warn); }
 @keyframes hft-dispatch-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes hft-dispatch-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px); } }
+
+/* the pressed effort: a lamp, not a seal */
+.sf.sf-el.hft-dispatch.hft-effort .ico { width: 13px; height: 13px; color: var(--hft-gold); }
+.sf.sf-el.hft-dispatch.hft-effort { animation: hft-effort-in 520ms var(--hft-out) both; }
+@keyframes hft-effort-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; } }
 
 /* ---------- subagents: Tern measures agent rows itself, so only face and color change here */
 .sf.sf-agent[data-role='subagent'] { background: none; box-shadow: none; color: var(--hft-ink); }
