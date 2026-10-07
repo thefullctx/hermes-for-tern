@@ -91,7 +91,7 @@ Streamed text is released at an even pace however bursty the model's output, beh
 caret, and is written in gold ink that dries: the newest words appear in gold and settle into the
 text color within about half a second. A gold thread runs down the gutter through a turn's steps,
 gold while Hermes works and resting as a hairline afterwards. A finished
-turn closes with `☤ delivered · time · tokens`, a line a gold front writes on before it dries, and
+turn closes with `☤ delivered · time · tokens · rate`, a line a gold front writes on before it dries, and
 Hermes signs it with the wordmark's H, whose ink dries to faint when the next turn begins; turns
 longer than a minute also release a few sparks from the `☤`. A running tool's `●` breathes and the dots of
 its leader march toward its live timer; when it finishes, the `●` pops into its outcome color and
@@ -157,8 +157,18 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
   tokens, time and a one-line summary, with grandchildren nested under their parent.
 - Composer typing, multiline paste, Unicode, native selection and basic undo.
-- Tool approval buttons using the backend's offered choices.
-- Clarification questions: options, multiple selections, free text and skipping.
+- Tool approval cards using the backend's offered choices, answered with the mouse or the keyboard:
+  number keys pick a choice, `Enter` allows once, `Escape` denies.
+- Clarification questions: options, multiple selections, free text and skipping, with number keys
+  selecting an option while the answer box is still empty.
+- Follow-ups composed while Hermes works are queued and sent when the turn ends, shown above the
+  composer as `queued · …` so nothing typed is dropped.
+- Local commands: `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit`.
+  `/doctor` reports the launcher, backend command, protocol version and session in the pane.
+- A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
+  the ring, with the new level floating above the composer under a lamp. The level is a frontend
+  setting today: it is not yet sent to Hermes, so which levels a given model supports is not known.
+- Tool output longer than 48,000 characters says how much was left out rather than truncating silently.
 - Stop and a new prompt after interruption.
 - Backend error reporting and orderly terminal restoration.
 - Existing model/provider/profile configuration; chat flags `--model`, `--provider`, `--profile` and `--tui`.
@@ -172,15 +182,21 @@ and it never automatically approves a request.
 
 | Key | Action |
 | --- | --- |
-| Enter | Send a prompt or answer a clarification |
+| Enter | Send a prompt, answer a clarification, or allow once on a pending approval |
+| 1–9 | Pick the choice shown on an approval or clarification card |
 | Shift+Enter / Alt+Enter | Insert a newline |
 | Ctrl+C | Stop an active turn; clear a draft when idle; exit when idle with an empty draft |
-| Escape | Stop the active turn |
+| Escape | Stop the active turn; deny a pending approval |
 | Ctrl+D with an empty draft | Exit |
 | Native selection / undo shortcuts | Handled through Tern's edit and undo events |
 
-The composer remains editable while Hermes works; it holds your next draft until the turn ends.
-`/stop`, `/quit` and `/exit` are local commands. Other slash commands are not implemented yet.
+The composer stays editable while Hermes works: `Enter` holds your message and sends it the moment
+the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
+is still empty, so typing a number into a free-text answer types a number.
+
+`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit` are local commands,
+answered in the pane. A slash command Hermes does not implement is refused with a pointer to
+`/help` rather than sent to the model.
 
 ## Restore the original command
 
@@ -220,7 +236,8 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 ## MVP boundaries
 
 One live conversation per process. Session browsing/resume, restart recovery, model pickers,
-attachments, full slash-command support, voice and desktop browser bridges are not implemented.
+attachments, voice and desktop browser bridges are not implemented. Slash commands are limited to
+the local set above; anything meant for the model is refused rather than forwarded.
 Subagents show their goal, status, current tool and totals, nested by parent; their transcripts
 and per-agent controls (watch, steer, interrupt) are not available yet. The visual demo shows
 sequential work phases, not subagents.
@@ -230,7 +247,8 @@ error so they cannot leave the agent waiting indefinitely.
 
 Tern's inline surface disappears when you return to the shell prompt. Hermes owns durable conversation
 storage; the Tern transcript is not a persistence layer. Multiplexers such as tmux disable SDK detection.
-Long tool output is visually truncated at 48,000 characters in this MVP.
+Long tool output is visually truncated at 48,000 characters in this MVP; the row states how many
+characters it left out.
 
 ## Validation
 
