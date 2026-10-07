@@ -111,6 +111,7 @@ class App:
                 self.submit,
                 self.assets,
                 self.retry,
+                self.cycle_effort,
             )
         )
         if self.backend:
@@ -277,6 +278,10 @@ class App:
             self.request("session.interrupt", self.scoped())
             self.state.activity = "Stopping"
             self.state.touch()
+
+    def cycle_effort(self) -> None:
+        """The ring was pressed: think a little deeper, or not, from the next turn on."""
+        self.state.cycle_effort()
 
     def suggest(self, text: str) -> None:
         self.draft = Draft(text, len(text))

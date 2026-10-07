@@ -27,6 +27,18 @@ LEAVE = 0.6
 QUEUE = 8
 
 
+# Thinking effort, in the order the button steps: a ring fills as it rises.
+EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+# How long the level's name floats after a press before it goes away.
+EFFORT_NOTICE = 1.6
+
+
+def supported_efforts(model: Any) -> tuple[str, ...]:
+    """The levels the ring steps through. Hermes is asked first when it answers; until it
+    does, every level the protocol knows is offered."""
+    return EFFORTS
+
+
 def delivered(seconds: float, usage: dict) -> str:
     """The quiet line that closes a turn: how long it took and what it used."""
     took = f"{seconds:.1f}s" if seconds < 60 else f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
@@ -233,6 +245,10 @@ class Conversation:
         self.musing = False
         # Follow-ups composed while Hermes works, sent the moment the turn ends.
         self.queued: list[str] = []
+        # Thinking effort: the level the ring shows, and when its name last floated.
+        self.effort: str = "off"
+        self.effort_notice: float | None = None
+        self.effort_presses: int = 0
 
     def touch(self) -> None:
         self.revision += 1
@@ -298,6 +314,19 @@ class Conversation:
             parts.append(f"{fuel:.0f}% context")
         return " · ".join(parts) or "Hermes has not reported any usage yet."
 
+    def cycle_effort(self) -> str:
+        """Step to the next level this model supports and float its name; returns the new level."""
+        levels = supported_efforts(self.info.get("model"))
+        index = levels.index(self.effort) if self.effort in levels else -1
+        self.effort = levels[(index + 1) % len(levels)]
+        self.effort_notice = time.monotonic() + EFFORT_NOTICE
+        self.effort_presses += 1
+        self.touch()
+        return self.effort
+
+    def effort_notice_live(self, now: float) -> bool:
+        return self.effort_notice is not None and self.effort_notice > now
+
     def pace(self, now: float) -> None:
         """Reveal streamed text smoothly, however bursty its arrival."""
         dt = min(0.1, max(0.0, now - self._paced_at))
@@ -328,6 +357,9 @@ class Conversation:
         before = [(d.key, d.leaving(now)) for d in self.dispatches]
         self.dispatches = [d for d in self.dispatches if not d.gone(now)]
         if [(d.key, d.leaving(now)) for d in self.dispatches] != before:
+            self.touch()
+        if self.effort_notice is not None and not self.effort_notice_live(now):
+            self.effort_notice = None
             self.touch()
 
     def assistant(self) -> Row:

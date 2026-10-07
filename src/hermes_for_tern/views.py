@@ -10,7 +10,7 @@ from typing import Callable
 from tern_sdk import ui
 
 from .editor import Draft
-from .state import Agent, Conversation, Dispatch, Question, Row
+from .state import EFFORT_NOTICE, Agent, Conversation, Dispatch, Question, Row
 
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
@@ -510,6 +510,7 @@ def view(
     submit: Callable | None = None,
     assets: dict[str, str] | None = None,
     retry: Callable | None = None,
+    effort: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
@@ -655,6 +656,14 @@ def view(
             ui.seg("hermes", role="brand", key="brand"),
             ui.seg("SIMULATED DEMO", role="demo", key="demo") if state.info.get("demo") else None,
             ui.seg(model, icon="brain", key="model"),
+            # The ring fills as thinking gets deeper; press it to step on.
+            ui.effort(
+                state.effort,
+                role="effort",
+                key="effort",
+                on_click=(lambda _: effort()) if effort else None,
+                title=f"thinking effort: {state.effort}",
+            ),
             ui.seg(cwd.name, icon="folder", key="project"),
             ui.seg(f"{usage:,} tokens", side="right", key="usage")
             if isinstance(usage, int) and usage
@@ -689,6 +698,14 @@ def view(
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
             dispatches(state.dispatches) if state.dispatches else None,
+            ui.toast(
+                state.effort,
+                ttl=EFFORT_NOTICE,
+                role="effort-toast",
+                key=f"effort-{state.effort_presses}",
+            )
+            if state.effort_notice_live(time.monotonic())
+            else None,
         ),
         "dock": ui.col(*dock, gap="none"),
     }

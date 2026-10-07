@@ -1,9 +1,10 @@
+import time
 from pathlib import Path
 
 from tern_sdk.reconcile import View
 
 from hermes_for_tern.editor import Draft
-from hermes_for_tern.state import Conversation, Question
+from hermes_for_tern.state import EFFORTS, Conversation, Question
 from hermes_for_tern.views import CLIP, trail, view
 
 
@@ -154,8 +155,21 @@ def test_the_pen_replaces_the_spinner_only_while_hermes_muses_and_errands_are_un
     assert signatures(state, assets) == {"errands-signature": "errands"}
 
 
-def build(state, draft=None):
-    return View.build(view(state, draft or Draft(), Draft(), Path("/project"), noop, noop, noop, noop, noop))
+def build(state, draft=None, effort=None):
+    return View.build(
+        view(
+            state,
+            draft or Draft(),
+            Draft(),
+            Path("/project"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            effort=effort,
+        )
+    )
 
 
 def ids_with_role(built, role):
@@ -216,3 +230,36 @@ def test_a_tool_body_past_the_clip_says_how_much_it_left_out():
     assert note == ["main.canvas.r1.r3.clipped.clip"]
     text = next(n.wire()["p"]["text"] for n in build(state).nodes().values() if n.wire()["id"] == note[0])
     assert "250 more characters" in text
+
+
+def test_the_effort_ring_sits_beside_the_model_and_steps_through_every_level():
+    state = Conversation()
+    assert EFFORTS == ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+    seen = []
+    for _ in range(len(EFFORTS) + 1):
+        ring = next(
+            n.wire()
+            for n in build(state, effort=lambda: None).nodes().values()
+            if n.wire().get("p", {}).get("role") == "effort"
+        )
+        assert ring["k"] == "effort"
+        assert ring["p"]["actions"] == {"click": "click"}
+        seen.append(ring["p"]["level"])
+        state.cycle_effort()
+    # One full loop and back to where it started.
+    assert seen[1:] == list(EFFORTS[1:]) + [EFFORTS[0]]
+    assert seen[-1] == EFFORTS[0]
+
+
+def test_the_pressed_level_floats_then_goes_away_itself():
+    state = Conversation()
+    assert not ids_with_role(build(state), "effort-toast")
+    state.cycle_effort()
+    assert ids_with_role(build(state), "effort-toast") == ["layer.effort-1"]
+    # A second press re-keys it, so the same level can show again.
+    state.cycle_effort()
+    assert ids_with_role(build(state), "effort-toast") == ["layer.effort-2"]
+    state.effort_notice = time.monotonic() - 1
+    state.pace(time.monotonic())
+    assert state.effort_notice is None
+    assert not ids_with_role(build(state), "effort-toast")
