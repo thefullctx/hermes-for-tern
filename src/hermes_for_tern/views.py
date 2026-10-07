@@ -10,7 +10,7 @@ from typing import Callable
 from tern_sdk import ui
 
 from .editor import Draft
-from .state import EFFORT_NOTICE, Agent, Conversation, Dispatch, Question, Row
+from .state import Agent, Conversation, Dispatch, Question, Row
 
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
@@ -240,10 +240,23 @@ def undelivered(row: Row, state: Conversation, retry: Callable | None):
     )
 
 
-def dispatches(notes: list[Dispatch]):
-    """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade."""
+def effort_notice(level: str, key: str):
+    """The pressed effort, floating like a dispatch but with a lamp rather than a seal."""
+    return ui.html.div(
+        ui.icon("lightbulb", tone="accent", key="mark"),
+        ui.html.span("thinking effort", class_="hft-dispatch-title", key="title"),
+        ui.html.span(level, class_="hft-dispatch-text", key="level"),
+        class_="hft-dispatch hft-effort",
+        key=key,
+    )
+
+
+def dispatches(notes: list[Dispatch], effort: tuple[str, str] | None = None):
+    """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade.
+    `effort` is (level, key) for the lamp that shows the pressed thinking effort."""
     now = time.monotonic()
     return ui.html.div(
+        *((effort_notice(*effort),) if effort else ()),
         *(
             ui.html.div(
                 ui.html.span("☤", class_="hft-dispatch-mark", key="mark"),
@@ -697,17 +710,13 @@ def view(
         ),
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
-            dispatches(state.dispatches) if state.dispatches else None,
-            ui.toast(
-                state.effort,
-                sub="thinking effort",
-                # Tern measures every duration in milliseconds, ttl included.
-                ttl=EFFORT_NOTICE * 1000,
-                tone="accent",
-                role="effort-toast",
-                key=f"effort-{state.effort_presses}",
+            dispatches(
+                state.dispatches,
+                (state.effort, f"effort-{state.effort_presses}")
+                if state.effort_notice_live(time.monotonic())
+                else None,
             )
-            if state.effort_notice_live(time.monotonic())
+            if state.dispatches or state.effort_notice_live(time.monotonic())
             else None,
         ),
         "dock": ui.col(*dock, gap="none"),

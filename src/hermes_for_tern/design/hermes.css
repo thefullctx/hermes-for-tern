@@ -389,6 +389,13 @@
 @keyframes hft-dispatch-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes hft-dispatch-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px); } }
 
+/* the pressed effort: a lamp, not a seal */
+.sf.sf-el.hft-dispatch.hft-effort .ico { width: 13px; height: 13px; color: var(--hft-gold); }
+.sf.sf-el.hft-dispatch.hft-effort { animation: hft-effort-in 520ms var(--hft-out) both; }
+@keyframes hft-effort-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; } }
+
 /* ---------- subagents: Tern measures agent rows itself, so only face and color change here */
 .sf.sf-agent[data-role='subagent'] { background: none; box-shadow: none; color: var(--hft-ink); }
 .sf.sf-agent[data-role='subagent'] .sf-agent-row { background: none; box-shadow: none; }

@@ -180,6 +180,23 @@ def ids_with_role(built, role):
     ]
 
 
+def lamps(built):
+    """The floating lamp that names the pressed effort level."""
+    return [
+        node["id"]
+        for node in (n.wire() for n in built.nodes().values())
+        if "hft-effort" in node.get("p", {}).get("class", "")
+    ]
+
+
+def icon_name(built):
+    return next(
+        node["p"]["name"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node["k"] == "icon" and node["id"].startswith("layer.dispatches")
+    )
+
+
 def test_a_held_follow_up_is_shown_in_the_dock_and_counted():
     state = Conversation()
     state.ready = True
@@ -251,19 +268,16 @@ def test_the_effort_ring_sits_beside_the_model_and_steps_through_every_level():
     assert seen[-1] == EFFORTS[0]
 
 
-def test_the_pressed_level_floats_then_goes_away_itself():
+def test_the_pressed_level_floats_with_a_lamp_then_goes_away_itself():
     state = Conversation()
-    assert not ids_with_role(build(state), "effort-toast")
+    assert lamps(build(state)) == []
     state.cycle_effort()
-    # Tern counts durations in milliseconds: a seconds value would flash for one frame.
-    toast = next(n.wire() for n in build(state).nodes().values() if n.wire()["id"] == "layer.effort-1")
-    assert toast["p"]["ttl"] == 1600
-    assert toast["p"]["text"] == "minimal" and toast["p"]["sub"] == "thinking effort"
-    assert ids_with_role(build(state), "effort-toast") == ["layer.effort-1"]
+    assert lamps(build(state)) == ["layer.dispatches.effort-1"]
+    assert icon_name(build(state)) == "lightbulb"
     # A second press re-keys it, so the same level can show again.
     state.cycle_effort()
-    assert ids_with_role(build(state), "effort-toast") == ["layer.effort-2"]
+    assert lamps(build(state)) == ["layer.dispatches.effort-2"]
     state.effort_notice = time.monotonic() - 1
     state.pace(time.monotonic())
     assert state.effort_notice is None
-    assert not ids_with_role(build(state), "effort-toast")
+    assert lamps(build(state)) == []
