@@ -700,7 +700,10 @@ def view(
             dispatches(state.dispatches) if state.dispatches else None,
             ui.toast(
                 state.effort,
-                ttl=EFFORT_NOTICE,
+                sub="thinking effort",
+                # Tern measures every duration in milliseconds, ttl included.
+                ttl=EFFORT_NOTICE * 1000,
+                tone="accent",
                 role="effort-toast",
                 key=f"effort-{state.effort_presses}",
             )

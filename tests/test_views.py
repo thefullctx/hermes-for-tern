@@ -255,6 +255,10 @@ def test_the_pressed_level_floats_then_goes_away_itself():
     state = Conversation()
     assert not ids_with_role(build(state), "effort-toast")
     state.cycle_effort()
+    # Tern counts durations in milliseconds: a seconds value would flash for one frame.
+    toast = next(n.wire() for n in build(state).nodes().values() if n.wire()["id"] == "layer.effort-1")
+    assert toast["p"]["ttl"] == 1600
+    assert toast["p"]["text"] == "minimal" and toast["p"]["sub"] == "thinking effort"
     assert ids_with_role(build(state), "effort-toast") == ["layer.effort-1"]
     # A second press re-keys it, so the same level can show again.
     state.cycle_effort()
