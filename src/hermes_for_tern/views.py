@@ -240,20 +240,29 @@ def undelivered(row: Row, state: Conversation, retry: Callable | None):
     )
 
 
-def effort_notice(level: str, key: str):
-    """The pressed effort, floating like a dispatch but with a lamp rather than a seal."""
+def hermes_wire(state: Conversation) -> str | None:
+    """What Hermes says it put on the wire, when that differs from what the ring asked for."""
+    wire = state.info.get("reasoning_effort_wire")
+    return wire if isinstance(wire, str) and wire else None
+
+
+def effort_notice(level: str, key: str, wire: str | None = None):
+    """The pressed effort, floating like a dispatch but with a lamp rather than a seal. When
+    Hermes clamps the level to something this route actually honours, say so."""
+    clamped = wire and wire not in (level, "" if level == "off" else None)
     return ui.html.div(
         ui.icon("lightbulb", tone="accent", key="mark"),
         ui.html.span("thinking effort", class_="hft-dispatch-title", key="title"),
         ui.html.span(level, class_="hft-dispatch-text", key="level"),
+        ui.html.span(f"sends {wire} here", class_="hft-dispatch-sub", key="wire") if clamped else None,
         class_="hft-dispatch hft-effort",
         key=key,
     )
 
 
-def dispatches(notes: list[Dispatch], effort: tuple[str, str] | None = None):
+def dispatches(notes: list[Dispatch], effort: tuple[str, str, str | None] | None = None):
     """Notes above the composer: a ☤, what happened, and a quiet detail; they rise, then fade.
-    `effort` is (level, key) for the lamp that shows the pressed thinking effort."""
+    `effort` is (level, key, wire) for the lamp showing the pressed thinking effort."""
     now = time.monotonic()
     return ui.html.div(
         *((effort_notice(*effort),) if effort else ()),
@@ -712,7 +721,11 @@ def view(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
             dispatches(
                 state.dispatches,
-                (state.effort, f"effort-{state.effort_presses}")
+                (
+                    state.effort,
+                    f"effort-{state.effort_presses}",
+                    hermes_wire(state),
+                )
                 if state.effort_notice_live(time.monotonic())
                 else None,
             )

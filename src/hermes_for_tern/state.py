@@ -34,9 +34,24 @@ EFFORT_NOTICE = 1.6
 
 
 def supported_efforts(model: Any) -> tuple[str, ...]:
-    """The levels the ring steps through. Hermes is asked first when it answers; until it
-    does, every level the protocol knows is offered."""
+    """The levels the ring steps through: Tern draws seven, and Hermes has no way to ask which
+    of them a given model honours -- it clamps silently instead. Hermes's own `ultra` sits above
+    `max` and has no ring level, so it is unreachable from here."""
     return EFFORTS
+
+
+def hermes_effort(level: str) -> str:
+    """A ring level as Hermes words it. Hermes reads `off` as a *display* word (`hide`) rather
+    than an effort level, so the ring's off must be sent as `none` or thinking stays switched on
+    with its reasoning merely hidden."""
+    return "none" if level == "off" else level
+
+
+def ring_effort(value: str) -> str:
+    """What Hermes reports as one of the seven levels the ring can draw."""
+    if value in ("none", "false", "disabled"):
+        return "off"
+    return value if value in EFFORTS else "max"
 
 
 def delivered(seconds: float, usage: dict) -> str:
@@ -423,6 +438,11 @@ class Conversation:
             self.settle()
         if kind == "session.info":
             self.info.update(payload)
+            # Hermes owns the level: it echoes the accepted effort, so after a clamp the ring
+            # shows what was really applied rather than what was asked for.
+            reported = payload.get("reasoning_effort")
+            if isinstance(reported, str) and reported:
+                self.effort = ring_effort(reported)
             self.ready = True
             self.activity = "Ready" if not self.busy else self.activity
         elif kind == "message.start":

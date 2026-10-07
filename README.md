@@ -166,8 +166,13 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Local commands: `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit`.
   `/doctor` reports the launcher, backend command, protocol version and session in the pane.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
-  the ring, with the new level floating above the composer under a lamp. The level is a frontend
-  setting today: it is not yet sent to Hermes, so which levels a given model supports is not known.
+  the ring, with the new level floating above the composer under a lamp. The ring sends
+  `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
+  The ring's `off` travels as Hermes's `none`, because Hermes reads `off` as a display word that
+  hides reasoning without stopping thinking. Hermes also has an `ultra` above `max` that Tern's
+  ring cannot draw, so it is unreachable from here. Hermes offers no way to ask which levels a
+  model honours; it clamps silently to the nearest weaker level and reports the result as
+  `reasoning_effort_wire`, which the lamp shows when it differs from what was asked for.
 - Tool output longer than 48,000 characters says how much was left out rather than truncating silently.
 - Stop and a new prompt after interruption.
 - Backend error reporting and orderly terminal restoration.

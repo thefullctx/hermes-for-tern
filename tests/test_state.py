@@ -1,4 +1,15 @@
-from hermes_for_tern.state import FOLD, MUSING, Conversation
+from hermes_for_tern.state import (
+    EFFORTS,
+    FOLD,
+    MUSING,
+    Conversation,
+    hermes_effort,
+    ring_effort,
+)
+
+# Hermes's own vocabulary: VALID_REASONING_EFFORTS plus the "none" that disables thinking.
+# Anything the ring sends must be one of these.
+VALID = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
 def assistant_texts(state):
@@ -303,3 +314,31 @@ def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks():
     state.event("message.start", {})
     state.pace(start + MUSING + 0.1)
     assert not state.musing
+
+
+def test_the_rings_off_is_hermes_none_because_hermes_reads_off_as_hide():
+    # Hermes routes "off" to its display words: it would hide the reasoning and leave
+    # thinking switched on. The ring's off must travel as "none".
+    assert hermes_effort("off") == "none"
+    assert hermes_effort("minimal") == "minimal"
+    assert hermes_effort("max") == "max"
+    assert all(hermes_effort(level) in VALID for level in EFFORTS)
+
+
+def test_hermes_wording_maps_back_onto_the_seven_levels_the_ring_can_draw():
+    assert ring_effort("none") == "off"
+    assert ring_effort("false") == "off"
+    assert ring_effort("high") == "high"
+    # Hermes's own "ultra" sits above max and has no ring level.
+    assert ring_effort("ultra") == "max"
+
+
+def test_the_ring_follows_the_level_hermes_reports_rather_than_the_one_asked_for():
+    state = Conversation()
+    state.effort = "max"
+    state.event("session.info", {"reasoning_effort": "high", "reasoning_effort_wire": "high"})
+    assert state.effort == "high"
+    # An absent or empty report must not knock the ring back to off.
+    state.effort = "high"
+    state.event("session.info", {"model": "muse-spark-1.3"})
+    assert state.effort == "high"

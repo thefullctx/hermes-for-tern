@@ -13,7 +13,7 @@ from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEven
 
 from .editor import Draft
 from .rpc import Backend
-from .state import Conversation, Question
+from .state import Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
 from .views import view
 
@@ -280,8 +280,10 @@ class App:
             self.state.touch()
 
     def cycle_effort(self) -> None:
-        """The ring was pressed: think a little deeper, or not, from the next turn on."""
-        self.state.cycle_effort()
+        """The ring was pressed: ask Hermes to think a little deeper, or not, from now on."""
+        level = self.state.cycle_effort()
+        if self.state.session_id:
+            self.request("config.set", self.scoped(key="reasoning", value=hermes_effort(level)))
 
     def suggest(self, text: str) -> None:
         self.draft = Draft(text, len(text))
