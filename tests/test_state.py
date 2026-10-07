@@ -151,7 +151,7 @@ def test_a_completed_turn_is_signed_with_its_time_and_tokens_but_a_stopped_one_i
     state.turn_started -= 75
     state.event("message.complete", {"text": "Hi", "usage": {"total": 12480}})
     assert state.rows[-1].kind == "delivered"
-    assert state.rows[-1].text == "delivered · 1m 15s · 12.5K tokens"
+    assert state.rows[-1].text == "delivered · 1m 15s · 12.5K tokens · 166 tok/s"
     state.begin("again")
     state.event("message.complete", {"status": "interrupted"})
     assert state.rows[-1].kind == "notice"

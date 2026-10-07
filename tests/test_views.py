@@ -3,8 +3,8 @@ from pathlib import Path
 from tern_sdk.reconcile import View
 
 from hermes_for_tern.editor import Draft
-from hermes_for_tern.state import Conversation
-from hermes_for_tern.views import trail, view
+from hermes_for_tern.state import Conversation, Question
+from hermes_for_tern.views import CLIP, trail, view
 
 
 def noop(*args):
@@ -152,3 +152,67 @@ def test_the_pen_replaces_the_spinner_only_while_hermes_muses_and_errands_are_un
     state.event("todo.updated", {"todos": [{"id": "1", "content": "Look", "status": "completed"}]})
     state.musing = True
     assert signatures(state, assets) == {"errands-signature": "errands"}
+
+
+def build(state, draft=None):
+    return View.build(view(state, draft or Draft(), Draft(), Path("/project"), noop, noop, noop, noop, noop))
+
+
+def ids_with_role(built, role):
+    return [
+        node["id"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("role") == role
+    ]
+
+
+def test_a_held_follow_up_is_shown_in_the_dock_and_counted():
+    state = Conversation()
+    state.ready = True
+    state.begin("first")
+    state.queue("and then this")
+    state.queue("last thing")
+    built = build(state)
+    assert ids_with_role(built, "queued") == ["dock.queued-0.queued", "dock.queued-1.queued"]
+    counts = [
+        node["p"]["text"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("role") == "depth"
+    ]
+    assert sorted(counts) == ["1/2", "2/2"]
+
+
+def test_the_queue_hint_only_appears_while_hermes_is_actually_working():
+    state = Conversation()
+    state.ready = True
+    state.begin("first")
+    assert not ids_with_role(build(state), "queued-hint")
+    built = build(state, Draft("another thought"))
+    assert ids_with_role(built, "queued-hint") == ["dock.queued-hint"]
+
+
+def test_every_offered_choice_is_numbered_on_its_button():
+    state = Conversation()
+    state.session_id = "live"
+    state.questions["r1"] = Question("r1", "approval", {"choices": ["once", "session", "deny"]})
+    built = build(state)
+    hints = sorted(
+        node["p"]["text"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("class") == "hft-hint"
+    )
+    assert hints == ["1", "2", "3"]
+
+
+def test_a_tool_body_past_the_clip_says_how_much_it_left_out():
+    state = Conversation()
+    state.begin("go")
+    state.event("tool.complete", {"tool_id": "t", "name": "terminal", "result": {"output": "x" * 12}})
+    assert not ids_with_role(build(state), "clipped")
+    state.event(
+        "tool.complete", {"tool_id": "u", "name": "terminal", "result": {"output": "y" * (CLIP + 250)}}
+    )
+    note = ids_with_role(build(state), "clipped")
+    assert note == ["main.canvas.r1.r3.clipped.clip"]
+    text = next(n.wire()["p"]["text"] for n in build(state).nodes().values() if n.wire()["id"] == note[0])
+    assert "250 more characters" in text
