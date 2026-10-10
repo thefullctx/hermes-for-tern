@@ -32,6 +32,11 @@ QUEUE = 8
 EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 # How long the level's name floats after a press before it goes away.
 EFFORT_NOTICE = 1.6
+# Hermes's server requests that take one typed answer, masked while it is typed. An empty answer
+# is Hermes's own word for "skipped".
+SECRET_METHODS = ("sudo", "secret", "vault.unlock_prompt", "vault.code")
+# Seconds between `subagent.tail` reads while a child is watched.
+TAIL = 1.5
 
 
 def supported_efforts(model: Any) -> tuple[str, ...]:
@@ -230,12 +235,23 @@ class Question:
 
 @dataclass
 class Sheet:
-    """The model sheet over the dock: what has been typed to filter it, and the row the cursor
-    sits on. `chosen` is the row's id — the value a switch sends."""
+    """The model sheet: what has been typed to filter it, and the row the cursor sits on.
+    `chosen` is the row's id — the value a switch sends."""
 
     query: str = ""
     chosen: str = ""
     confirming: bool = False  # Hermes asked whether the expensive pick is worth it
+
+
+@dataclass
+class Watch:
+    """One delegated child, watched: its live transcript, and the line being steered to it."""
+
+    id: str
+    tail: str = ""
+    available: bool = True
+    truncated: bool = False
+    steer: str = ""
 
 
 class Conversation:
@@ -278,6 +294,8 @@ class Conversation:
         # The model sheet over the dock, and Hermes's catalog it draws from (`model.options`).
         self.models: dict = {}
         self.sheet: Sheet | None = None
+        # The watched delegated child (`subagent.tail`), when one is open.
+        self.watch: Watch | None = None
 
     def touch(self) -> None:
         self.revision += 1
@@ -612,6 +630,16 @@ class Conversation:
             key = str(payload.get("key", ""))
             self.dispatches = [d for d in self.dispatches if d.key != key]
             self._away = [d for d in self._away if d.key != key]
+        elif kind == "btw.complete":
+            question = str(payload.get("question") or "").strip()
+            answer = next(
+                (line.strip() for line in str(payload.get("text", "")).splitlines() if line.strip()), ""
+            )
+            self.dispatch(
+                f"btw-{payload.get('task_id', '')}",
+                question[:120] or "side answer",
+                answer[:120],
+            )
         elif kind == "background.complete":
             first = next(
                 (line.strip() for line in str(payload.get("text", "")).splitlines() if line.strip()), ""
@@ -694,6 +722,35 @@ class Conversation:
 
     def approval(self) -> Question | None:
         return next((q for q in self.questions.values() if q.method == "approval"), None)
+
+    def secret(self) -> Question | None:
+        """A pending one-string ask (a password, a key, a code), when Hermes is waiting for one."""
+        return next((q for q in self.questions.values() if q.method in SECRET_METHODS), None)
+
+    def open_watch(self, subagent_id: str) -> None:
+        if self.watch is None or self.watch.id != subagent_id:
+            self.watch = Watch(subagent_id)
+        self.touch()
+
+    def close_watch(self) -> None:
+        if self.watch is not None:
+            self.watch = None
+            self.touch()
+
+    def steer_watch(self, text: str) -> None:
+        if self.watch:
+            self.watch.steer = text
+            self.touch()
+
+    def watch_tail(self, payload: dict) -> None:
+        """`subagent.tail` answered: the child's last 16 KB, or that it has none yet."""
+        watch = self.watch
+        if watch is None or str(payload.get("subagent_id")) != watch.id:
+            return
+        watch.available = bool(payload.get("available"))
+        watch.tail = str(payload.get("text") or "")
+        watch.truncated = bool(payload.get("truncated"))
+        self.touch()
 
     def withdraw_approvals(self, payload: dict) -> None:
         """Hermes dropped pending approvals (interrupt, reap, teardown) and resolved them as deny;

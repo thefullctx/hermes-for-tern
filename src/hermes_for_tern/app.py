@@ -13,15 +13,27 @@ from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEven
 
 from .editor import Draft
 from .rpc import Backend
-from .state import Conversation, Question, hermes_effort
+from .state import SECRET_METHODS, TAIL, Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
 from .views import sheet_cursor, sheet_rows, view
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
 # What the composer can be told to do, all handled here rather than sent to the model.
-COMMANDS = ("/help", "/clear", "/cost", "/retry", "/doctor", "/stop", "/quit", "/exit", "/model")
-HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model"
+COMMANDS = (
+    "/help",
+    "/clear",
+    "/cost",
+    "/retry",
+    "/doctor",
+    "/stop",
+    "/quit",
+    "/exit",
+    "/model",
+    "/btw",
+    "/bg",
+)
+HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model · /btw · /bg"
 
 
 class App:
@@ -34,6 +46,8 @@ class App:
         self.state = Conversation()
         self.draft = Draft()
         self.answer_draft = Draft()
+        self.secret = Draft()
+        self.watched_at = 0.0
         self.backend: Backend | None = None
         self.surface = None
         self.assets: dict[str, str] = {}
@@ -77,6 +91,8 @@ class App:
                     if item is not None:
                         self.input(item)
                     now = time.monotonic()
+                    if self.state.watch and now - self.watched_at >= TAIL:
+                        self.read_tail()
                     self.state.pace(now)
                     if self.state.revision != revision and now - last_render >= 0.033:
                         self.render()
@@ -113,6 +129,8 @@ class App:
                 self.retry,
                 self.cycle_effort,
                 self.model_event,
+                self.secret,
+                self.watch_event,
             )
         )
         if self.backend:
@@ -211,6 +229,10 @@ class App:
                     self.state.touch()
                 elif method == "config.set":
                     self.model_set(result)
+                elif method == "subagent.tail":
+                    self.state.watch_tail(result)
+                elif method in ("subagent.interrupt", "subagent.steer"):
+                    self.steer_result(method, result)
             except Exception as exc:
                 if method in ("client.capabilities", "session.create"):
                     self.fail(str(exc))
@@ -235,6 +257,13 @@ class App:
             if method == "approval":
                 self._ack_approvals.append(rid)
             self.state.touch()
+        elif method in SECRET_METHODS:
+            # A one-string ask: a password, a key or a code. It is answered from the composer,
+            # masked while it is typed, and the empty answer is Hermes's word for "skipped".
+            self.state.questions[rid] = Question(rid, method, params)
+            self.state.touch()
+            if self.surface:
+                self.surface.focus("dock.composer")
         else:
             self.backend.answer(
                 rid, error={"code": -32601, "message": f"{method} is not supported by Hermes for Tern yet"}
@@ -265,6 +294,14 @@ class App:
                 question, choice if choice is not None else ", ".join(sorted(question.selected))
             )
 
+    def answer_secret(self, question: Question, value: str) -> None:
+        assert self.backend
+        self.backend.answer(question.rid, {"value": value})
+        self.state.questions.pop(question.rid, None)
+        # The answer is Hermes's the moment it is sent; keep no copy of it here.
+        self.secret = Draft()
+        self.state.touch()
+
     def skip(self, rid: str) -> None:
         question = self.state.questions.get(rid)
         if question:
@@ -292,6 +329,15 @@ class App:
         level = self.state.cycle_effort()
         if self.state.session_id:
             self.request("config.set", self.scoped(key="reasoning", value=hermes_effort(level)))
+
+    def watch_event(self, action: str) -> None:
+        """The watched child's own buttons: interrupt it, steer it, or stop watching."""
+        if action == "interrupt":
+            self.interrupt_agent()
+        elif action == "steer":
+            self.steer_agent(self.state.watch.steer if self.state.watch else "")
+        elif action == "close":
+            self.state.close_watch()
 
     def model_event(self, action: str, value: str = "") -> None:
         """The model sheet's own events: `open` from the model segment, `pick` from a row,
@@ -360,6 +406,74 @@ class App:
             params["confirm_expensive_model"] = True
         self.request("config.set", self.scoped(**params))
 
+    def side_question(self, text: str) -> None:
+        """Ask Hermes something beside the work it is doing; the answer lands as a dispatch."""
+        if not text or not self.state.session_id:
+            return
+        self.request("prompt.btw", self.scoped(text=text))
+
+    def background_task(self, text: str) -> None:
+        """Hand Hermes a task on a fresh agent; the answer lands as a dispatch when it is done."""
+        if not text or not self.state.session_id:
+            return
+        self.request("prompt.background", self.scoped(text=text))
+
+    def watch_agent(self, subagent_id: str) -> None:
+        """Open a delegated child: its live transcript, refreshed, with interrupt and steer."""
+        self.state.open_watch(subagent_id)
+        self.read_tail()
+
+    def read_tail(self) -> None:
+        watch = self.state.watch
+        if watch and self.state.session_id:
+            self.watched_at = time.monotonic()
+            self.request("subagent.tail", self.scoped(subagent_id=watch.id))
+
+    def interrupt_agent(self) -> None:
+        watch = self.state.watch
+        if watch and self.state.session_id:
+            self.request("subagent.interrupt", self.scoped(subagent_id=watch.id))
+
+    def steer_agent(self, text: str) -> None:
+        watch = self.state.watch
+        if not watch or not text.strip() or not self.state.session_id:
+            return
+        self.request("subagent.steer", self.scoped(subagent_id=watch.id, text=text))
+        self.state.steer_watch("")
+
+    def watch_key(self, item) -> bool:
+        """The watched child owns the keyboard while it is open: a line to steer it, Enter to
+        send, Escape to stop watching. True when the key was the watch's."""
+        watch = self.state.watch
+        if watch is None or item.ctrl or item.alt or item.meta:
+            return False
+        if item.name == "escape":
+            self.state.close_watch()
+        elif item.name == "enter":
+            self.steer_agent(watch.steer)
+        elif item.name == "backspace":
+            self.state.steer_watch(watch.steer[:-1])
+        elif item.text:
+            self.state.steer_watch(watch.steer + item.text)
+        else:
+            return False
+        return True
+
+    def steer_result(self, method: str, result: dict) -> None:
+        """Steering is queued, not delivered: a child past its last tool batch misses it."""
+        if method == "subagent.interrupt":
+            if result.get("found") is False:
+                self.state.add("notice", "That child already finished.")
+            else:
+                self.state.add("notice", "Child interrupted.")
+            return
+        status = str(result.get("status") or "")
+        detail = str(result.get("text") or "")
+        if status == "queued":
+            self.state.dispatch(f"steer-{result.get('subagent_id', '')}", "steered the child", detail[:120])
+        else:
+            self.state.add("notice", detail[:200] or "The child will not take that.")
+
     def model_set(self, result: dict) -> None:
         """Hermes answered a model switch: either it asks whether the expensive pick is worth it,
         or it holds the pick for the next turn because this one is still running."""
@@ -390,6 +504,11 @@ class App:
             self.request("prompt.submit", self.scoped(text=prompt))
 
     def submit(self, text: str | None = None) -> None:
+        question = self.state.secret()
+        if question:
+            # Enter sends what was typed; an empty answer is Hermes's word for "skipped".
+            self.answer_secret(question, self.secret.text if text is None else text)
+            return
         question = self.state.clarify()
         if question:
             answer = self.answer_draft.text if text is None else text
@@ -425,6 +544,10 @@ class App:
             self.model_event("open")
         elif text.startswith("/model "):
             self.switch_model(text[len("/model ") :].strip())
+        elif text.startswith("/btw "):
+            self.side_question(text[len("/btw ") :].strip())
+        elif text.startswith("/bg "):
+            self.background_task(text[len("/bg ") :].strip())
         elif text == "/stop":
             self.stop()
             self.draft = Draft()
@@ -493,7 +616,11 @@ class App:
         return False
 
     def input(self, item) -> None:
-        draft = self.answer_draft if self.state.clarify() else self.draft
+        draft = (
+            self.secret
+            if self.state.secret()
+            else (self.answer_draft if self.state.clarify() else self.draft)
+        )
         if isinstance(item, Key):
             if item.ctrl and item.name == "d" and not draft.text:
                 self.exit = True
@@ -506,10 +633,16 @@ class App:
                     self.exit = True
             elif self.sheet_key(item):
                 pass
+            elif self.watch_key(item):
+                pass
             elif self.choose_by_key(item):
                 pass
             elif item.name == "escape":
-                self.stop()
+                question = self.state.secret()
+                if question:
+                    self.answer_secret(question, "")
+                else:
+                    self.stop()
             elif item.name == "enter" and not (item.shift or item.alt):
                 self.submit()
             else:
