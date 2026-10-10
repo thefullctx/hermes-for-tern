@@ -118,7 +118,9 @@ class App:
             for rid in self._ack_approvals:
                 question = self.state.questions.get(rid)
                 if question:
-                    self.request("approval.received", self.scoped(request_id=question.params["request_id"]))
+                    request_id = question.params.get("request_id")
+                    if request_id:
+                        self.request("approval.received", self.scoped(request_id=request_id))
             self._ack_approvals.clear()
 
     def fail(self, message: str) -> None:

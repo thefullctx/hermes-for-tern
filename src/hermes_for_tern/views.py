@@ -12,6 +12,9 @@ from tern_sdk import ui
 from .editor import Draft
 from .state import Agent, Conversation, Dispatch, Question, Row
 
+# Keys that pick a question's choice, in the order the card shows them.
+DIGITS = "123456789"
+
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
 # Seconds of work after which a delivered turn is celebrated, quietly.
@@ -221,15 +224,38 @@ def search_tree(row: Row):
     return ui.col(*rows, role="search", key="output") if rows else None
 
 
+def surface_hint(surface: dict) -> str:
+    """What Hermes's error surface says will fix it, said before a retry that cannot work: the
+    credential to repair, or when the limit lifts."""
+    hints = []
+    provider = str(surface.get("provider_label") or surface.get("provider") or "")
+    env = str(surface.get("api_key_env") or "")
+    if surface.get("auth_kind") == "oauth":
+        hints.append(f"sign in to {provider} again" if provider else "sign in again")
+    elif env:
+        hints.append(f"set {env}")
+    elif surface.get("auth_kind") == "api_key":
+        hints.append(f"fix {provider}'s credentials" if provider else "fix the credentials")
+    resets_at = surface.get("resets_at")
+    if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
+        left = resets_at - time.time()
+        if left > 1:
+            hints.append(f"the limit lifts in {took(left)}")
+    return " · ".join(hints)
+
+
 def undelivered(row: Row, state: Conversation, retry: Callable | None):
-    """A failed turn: what failed, the provider's code when Hermes gives one, and a retry key."""
+    """A failed turn: what failed, what Hermes's error surface says will fix it, the provider's code
+    when Hermes gives one, and a retry key only when Hermes marked the failure retryable."""
     surface = row.result or {}
     code = str(surface.get("code") or "")
     status = re.search(r"\b([45]\d\d)\b", row.text)
     badge = status.group(1) if status else code.replace("_", " ")
     latest = state.can_retry and row is next((r for r in reversed(state.rows) if r.kind == "error"), None)
+    hint = surface_hint(surface)
     return ui.card(
         ui.text(row.text.strip(), key="body"),
+        ui.text(hint, tone="muted", role="cause", key="cause") if hint else None,
         ui.html.div(button("retry ⏎", retry, primary=True, key="retry"), class_="hft-actions", key="actions")
         if latest and retry
         else None,
@@ -421,7 +447,8 @@ def clarification_card(question: Question, choose: Callable, skip: Callable):
                 lambda c=choice: choose(question.rid, c),
                 primary=selected,
                 key=f"c{index}",
-                hint=f"{index + 1}",
+                # A digit only answers while one key can reach it; the rest stay clickable.
+                hint=f"{index + 1}" if index < len(DIGITS) else None,
             )
         )
     if current.get("multi_select"):

@@ -1,3 +1,4 @@
+import re
 import time
 from pathlib import Path
 
@@ -106,18 +107,84 @@ def test_search_results_render_as_a_tree_with_inked_matches():
     assert nodes["main.canvas.r1.r2"].wire()["p"]["target"] == r"timeout=\d"
 
 
-def test_undelivered_turn_offers_retry_only_when_it_can():
+def test_undelivered_turn_offers_retry_only_when_hermes_marks_it_retryable():
     state = Conversation()
     state.ready = True
     state.begin("hello")
     state.event(
-        "message.complete", {"status": "error", "text": "HTTP 429 from the provider", "error_surface": {}}
+        "message.complete",
+        {"status": "error", "text": "HTTP 429 from the provider", "error_surface": {"retryable": True}},
     )
     built = View.build(
         view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, None, None, noop)
     )
     card = built.nodes()["main.canvas.r1.r2"].wire()
     assert card["p"]["role"] == "undelivered" and card["p"]["head"][1]["t"].strip() == "429"
+    assert "main.canvas.r1.r2.actions" in built.nodes()
+
+    # A surface that says nothing about retryability earns no retry key.
+    state.begin("hello")
+    state.event("message.complete", {"status": "error", "text": "Boom.", "error_surface": {}})
+    assert (
+        "main.canvas.r3.r4.actions"
+        not in View.build(
+            view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, None, None, noop)
+        ).nodes()
+    )
+
+
+def test_an_undelivered_turn_names_the_fix_before_a_retry_that_cannot_work():
+    state = Conversation()
+    state.ready = True
+    state.begin("hello")
+    state.event(
+        "message.complete",
+        {
+            "status": "error",
+            "text": "Anthropic rejected the key.",
+            "error_surface": {
+                "layer": "auth",
+                "code": "auth_failed",
+                "retryable": False,
+                "auth_kind": "api_key",
+                "api_key_env": "ANTHROPIC_API_KEY",
+                "provider": "anthropic",
+                "provider_label": "Anthropic",
+            },
+        },
+    )
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, None, None, noop)
+    )
+    assert ids_with_role(built, "cause") == ["main.canvas.r1.r2.cause"]
+    hint = next(n.wire()["p"]["text"] for n in built.nodes().values() if n.wire()["id"].endswith(".cause"))
+    assert hint == "set ANTHROPIC_API_KEY"
+    assert "main.canvas.r1.r2.actions" not in built.nodes()
+
+
+def test_an_undelivered_turn_says_when_the_rate_limit_lifts():
+    state = Conversation()
+    state.ready = True
+    state.begin("hello")
+    state.event(
+        "message.complete",
+        {
+            "status": "error",
+            "text": "Rate limited (429).",
+            "error_surface": {
+                "layer": "provider",
+                "code": "rate_limit",
+                "retryable": True,
+                "resets_at": time.time() + 200,
+            },
+        },
+    )
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, None, None, noop)
+    )
+    hint = next(n.wire()["p"]["text"] for n in built.nodes().values() if n.wire()["id"].endswith(".cause"))
+    # a second may tick between the payload and the render, so the seconds are a range
+    assert re.fullmatch(r"the limit lifts in 3m (19|20)s", hint)
     assert "main.canvas.r1.r2.actions" in built.nodes()
 
 
@@ -233,6 +300,23 @@ def test_every_offered_choice_is_numbered_on_its_button():
         if node.get("p", {}).get("class") == "hft-hint"
     )
     assert hints == ["1", "2", "3"]
+
+
+def test_a_choice_no_key_can_reach_is_not_numbered():
+    state = Conversation()
+    state.session_id = "live"
+    many = [f"choice {index}" for index in range(11)]
+    state.questions["r1"] = Question(
+        "r1", "clarify", {"questions": [{"qid": "a", "question": "Pick one.", "choices": many}]}
+    )
+    built = build(state)
+    hints = sorted(
+        node["p"]["text"]
+        for node in (n.wire() for n in built.nodes().values())
+        if node.get("p", {}).get("class") == "hft-hint"
+    )
+    assert hints == [str(index) for index in range(1, 10)]  # "10" and "11" no key can answer
+    assert len(ids_with_role(built, "clarification")) == 1
 
 
 def test_a_tool_body_past_the_clip_says_how_much_it_left_out():
