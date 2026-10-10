@@ -169,7 +169,7 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Follow-ups composed while Hermes works are queued and sent when the turn ends, shown above the
   composer as `queued · …` so nothing typed is dropped.
 - Slash commands: Hermes's own (`/compress`, `/undo`, `/context`, `/usage`, `/plan`, `/goal`, …), your
-  skills, and this pane's `/model`, `/btw`, `/bg`, `/name`, `/cost`, `/doctor`, `/clear`, `/stop`,
+  skills, and this pane's `/model`, `/btw`, `/bg`, `/name`, `/resume`, `/cost`, `/doctor`, `/clear`, `/stop`,
   `/help` and `/quit`. Hermes runs its commands the way its own terminal does (`slash.exec`, then
   `command.dispatch` for skills and commands that need the live session) and refuses what may not run
   mid-turn itself. A short answer is a note; a long one folds to a few lines that open in place.
@@ -219,6 +219,13 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   ready for the next message. A session that cannot be found says so and starts a new one. On the way
   out, the pane prints how to come back: `hermes --resume <id>`, and `hermes -c "<title>"` once
   Hermes has named the session.
+- Switching sessions inside the pane: `/resume` (or `/sessions`) opens a sheet of Hermes's 50 most
+  recent sessions, newest first, each with its title (or how it began), size and age; type to filter,
+  arrows to move, `Enter` to pick one up. Its conversation replaces the transcript and this live
+  session is closed in Hermes; nothing is lost, since Hermes keeps every session. `/resume <id or
+  title>` skips the sheet, and switching waits until a running turn ends. A new session's welcome
+  offers `Continue “…”` for the last conversation. The sheet lists sessions from every project,
+  as Hermes's own picker does: Hermes's listing does not say which folder a session ran in.
 - Ordinary Hermes subcommands, including `hermes model`, `hermes doctor` and `hermes --version`,
   pass directly to the original command.
 
@@ -244,7 +251,7 @@ The composer stays editable while Hermes works: `Enter` holds your message and s
 the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
 is still empty, so typing a number into a free-text answer types a number.
 
-`/model`, `/btw`, `/bg`, `/name` (also `/title`), `/cost`, `/doctor`, `/clear`, `/stop`, `/help` and
+`/model`, `/btw`, `/bg`, `/name` (also `/title`), `/resume` (also `/sessions`), `/cost`, `/doctor`, `/clear`, `/stop`, `/help` and
 `/quit` (also `/exit`) are answered in the pane; every other slash command goes to Hermes, which runs
 it or says it does not know it. Nothing typed after a `/` is sent to the model as a message.
 
@@ -285,11 +292,12 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 
 ## MVP boundaries
 
-One live conversation per process. Session browsing from inside the pane, restart recovery, attachments,
+One live conversation per pane at a time. Restart recovery, attachments,
 voice and desktop browser bridges are not implemented. A session that runs for hundreds of turns
 draws its newest 60 and says how many are left out (`… N earlier turns`), so a pane stays responsive
-however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Hermes commands that switch sessions
-(`/new`, `/resume`, `/branch`, …) are not offered, since the pane follows one session.
+however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Hermes's other session commands
+(`/new`, `/branch`, …) are not offered, since the pane follows one session at a time; `/resume` is
+this pane's own.
 Subagents show their goal, status, current tool and totals, nested by parent; click one to watch its
 live transcript, steer it a line or interrupt it. The visual demo shows
 sequential work phases, not subagents.
@@ -329,10 +337,10 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 112 tests covering streaming/interim/final message ordering, paced
+The current suite contains 116 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns and Hermes's signature and working pen, resuming a session, the two-press Ctrl+C exit, Unicode edits, server-request answers, withdrawn
+turns and Hermes's signature and working pen, resuming and switching sessions, the two-press Ctrl+C exit, Unicode edits, server-request answers, withdrawn
 approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
 the watched subagent and its steer, the render window, the session title and the
 follow-up queue, the composer's live command list and Hermes's slash commands, process disconnection, reversible launcher installation and demo

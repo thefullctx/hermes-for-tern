@@ -736,8 +736,8 @@ def test_a_long_list_scrolls_with_the_cursor_and_says_how_many_there_are():
     state.slash.cursor = 25
     nodes = build(state, Draft("/", 1)).nodes()
     rows = [key for key in nodes if key.startswith("dock.slash.row-") and key.count(".") == 2]
-    assert len(rows) == 8 and rows[-1] == "dock.slash.row-/cmd15"
-    assert "of 30" in nodes["dock.slash.more"].wire()["p"]["text"]
+    assert len(rows) == 8 and rows[-1] == "dock.slash.row-/cmd14"
+    assert "of 31" in nodes["dock.slash.more"].wire()["p"]["text"]
 
 
 def test_the_welcome_fades_under_the_list_and_aliases_are_offered_once():

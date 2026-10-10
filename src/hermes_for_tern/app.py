@@ -25,6 +25,8 @@ COMMANDS = tuple(name.split(" ")[0] for name, _ in COMMAND_ROWS)
 HELP = "In this pane: " + " · ".join(COMMANDS)
 # `slash.exec` refusals that mean "not mine, ask command.dispatch" (skills, bundles, pending input).
 DISPATCH_CODES = (4011, 4018)
+# Sessions `/resume` lists, newest first.
+SESSIONS = 50
 # Output longer than this folds into a row of its own instead of a one-line note.
 NOTE_CHARS, NOTE_LINES = 180, 2
 
@@ -60,6 +62,7 @@ class App:
         self.asked: dict[Future, str] = {}
         self.completing: Future | None = None
         self.typed = ""  # the draft the command list's cursor was placed for
+        self.switching: str | None = None  # the session `/resume` is picking up in this pane
 
     def request(self, method: str, params: dict | None = None) -> Future:
         assert self.backend
@@ -144,6 +147,7 @@ class App:
                 self.watch_event,
                 self.state.unqueue,
                 self.pick_command,
+                self.resume_session,
             )
         )
         if self.backend:
@@ -206,6 +210,9 @@ class App:
                 if time.monotonic() > deadline:
                     if method == "complete.slash":
                         self.asked.pop(future, None)  # the list keeps this pane's own commands
+                    elif method == "session.resume" and self.switching:
+                        self.state.add("notice", f"Hermes did not pick up {self.switching!r} in time.")
+                        self.switching = None
                     elif method in ("session.resume", "session.most_recent"):
                         self.start_fresh(f"Hermes did not find {self.resume!r} in time")
                     elif method in ("session.create", "client.capabilities"):
@@ -234,10 +241,21 @@ class App:
                     else:
                         self.start_fresh("There is no earlier session to continue")
                 elif method == "session.resume":
+                    previous = self.state.session_id if self.switching else None
+                    if previous:
+                        self.state.switched()
+                        self.state.close_sheet()
+                    self.switching = None
                     self.session_ready(result, stored=result.get("session_key") or result.get("resumed"))
                     self.state.restore(result.get("messages") or [], result.get("info") or {})
+                    if previous and previous != self.state.session_id:
+                        self.request("session.close", {"session_id": previous})
+                elif method == "session.list":
+                    self.state.listed(result.get("sessions") or [])
                 elif method == "session.create":
                     self.session_ready(result, stored=result.get("stored_session_id"))
+                    if self.demo_duration is None:
+                        self.request("session.list", self.profiled(limit=SESSIONS))
                     if self.demo_duration is not None:
                         self.submit(f"Run a {self.demo_duration:g}-second simulated visual demo.")
                 elif method == "session.interrupt":
@@ -270,8 +288,13 @@ class App:
                 elif method in ("slash.exec", "command.dispatch"):
                     command = self.asked.pop(future, "")
                     self.state.add("notice", f"{command.split(' ')[0]}: {exc}")
+                elif method == "session.resume" and self.switching:
+                    self.state.add("notice", f"Could not resume {self.switching!r}: {exc}")
+                    self.switching = None
                 elif method in ("session.resume", "session.most_recent"):
                     self.start_fresh(f"Could not resume {self.resume!r}: {exc}")
+                elif method in ("session.list", "session.close"):
+                    pass  # the welcome and the sheet simply offer nothing; a close is best effort
                 elif method in ("client.capabilities", "session.create"):
                     self.fail(str(exc))
                 else:
@@ -432,7 +455,9 @@ class App:
                 self.request("model.options", self.scoped(refresh=True))
             self.state.open_sheet()
         elif action == "pick":
-            if value:
+            if value and self.state.sheet and self.state.sheet.kind == "sessions":
+                self.resume_session(value)
+            elif value:
                 self.state.choose_row(value)
                 self.switch_model(value)
         elif action == "confirm":
@@ -470,6 +495,9 @@ class App:
     def confirm_model(self) -> None:
         """The switch key: the chosen row, or the session's own model when nothing was chosen."""
         if not self.state.sheet:
+            return
+        if self.state.sheet.kind == "sessions":
+            self.resume_session(sheet_cursor(self.state))
             return
         if self.state.sheet.confirming:
             self.switch_model(self.state.sheet.chosen, confirmed=True)
@@ -701,6 +729,10 @@ class App:
             self.model_event("open")
         elif text.startswith("/model "):
             self.switch_model(text[len("/model ") :].strip())
+        elif text == "/resume":
+            self.open_sessions()
+        elif text.startswith("/resume "):
+            self.resume_session(text[len("/resume ") :].strip())
         elif text == "/name":
             self.state.add("notice", "Name the session with /name <title>.")
         elif text.startswith("/name "):
@@ -725,6 +757,28 @@ class App:
             self.doctor()
         else:
             self.hermes_command(text)
+
+    def open_sessions(self) -> None:
+        """The sessions sheet, filled from Hermes's store as soon as it answers."""
+        if not self.state.session_id:
+            return
+        self.request("session.list", self.profiled(limit=SESSIONS))
+        self.state.open_sheet("sessions")
+
+    def resume_session(self, target: str) -> None:
+        """Pick up an earlier session in this pane: its transcript replaces this one, and this live
+        session is closed in Hermes once the other is open (its history stays in Hermes's store)."""
+        if not target or not self.state.session_id or self.switching:
+            return
+        if self.state.busy:
+            self.state.add("notice", "Finish or stop this turn before switching sessions.")
+            return
+        if target == self.state.stored_session_id:
+            self.state.close_sheet()
+            self.state.add("notice", "This is the session you are in.")
+            return
+        self.switching = target
+        self.request("session.resume", self.profiled(session_id=target, cols=self.cols))
 
     def hermes_command(self, text: str) -> None:
         """Hand a slash command to Hermes, the way its own terminal does: `slash.exec` first, which

@@ -237,9 +237,11 @@ class Question:
 
 @dataclass
 class Sheet:
-    """The model sheet: what has been typed to filter it, and the row the cursor sits on.
-    `chosen` is the row's id — the value a switch sends."""
+    """A sheet over the dock — the model sheet, or the sessions sheet `/resume` opens: what has
+    been typed to filter it, and the row the cursor sits on. `chosen` is the row's id — the model
+    a switch sends, or the session a resume picks up."""
 
+    kind: str = "model"  # "model" or "sessions"
     query: str = ""
     chosen: str = ""
     confirming: bool = False  # Hermes asked whether the expensive pick is worth it
@@ -278,6 +280,9 @@ class Conversation:
         self.title: str = ""  # what Hermes named this session, when it has
         self.resumed = False  # picked up from Hermes's store (`--resume`, `-c`) rather than started here
         self.exit_armed: float | None = None  # when a first Ctrl+C asked for a second to leave
+        # Hermes's recent sessions (`session.list`) for `/resume`, and the one the welcome offers.
+        self.sessions: list[dict] | None = None
+        self.earlier: dict | None = None
         self.info: dict = {}
         self.busy = False
         self.ready = False
@@ -833,10 +838,33 @@ class Conversation:
             reason = str(payload.get("reason") or "Hermes withdrew it")
             self.add("notice", f"Permission request withdrawn ({reason}); it was denied.")
 
-    def open_sheet(self) -> None:
-        if self.sheet is None:
-            self.sheet = Sheet()
+    def open_sheet(self, kind: str = "model") -> None:
+        if self.sheet is None or self.sheet.kind != kind:
+            self.sheet = Sheet(kind)
         self.touch()
+
+    def listed(self, sessions: list) -> None:
+        """Hermes's recent sessions, newest first; the welcome offers the latest other than this one."""
+        self.sessions = [row for row in sessions if isinstance(row, dict) and row.get("id")]
+        self.earlier = next(
+            (
+                row
+                for row in self.sessions
+                if row["id"] != self.stored_session_id and (row.get("message_count") or 0) > 0
+            ),
+            None,
+        )
+        self.touch()
+
+    def switched(self) -> None:
+        """Leave this session's transcript behind for another one: nothing of it carries over."""
+        self.clear()
+        self.questions.clear()
+        self.queued.clear()
+        self.title = ""
+        self.last_prompt = ""
+        self.resumed = False
+        self.busy = False
 
     def close_sheet(self) -> None:
         if self.sheet is not None:

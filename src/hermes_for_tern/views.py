@@ -22,6 +22,7 @@ COMMAND_ROWS = (
     ("/btw <question>", "ask beside the running turn"),
     ("/bg <task>", "hand Hermes a task on a fresh agent"),
     ("/name <title>", "name this session"),
+    ("/resume [session]", "pick up an earlier session, by its id or title or from the list"),
     ("/cost", "what this session has spent"),
     ("/doctor", "launcher, backend, protocol and session"),
     ("/clear", "empty the transcript; Hermes still remembers"),
@@ -30,12 +31,12 @@ COMMAND_ROWS = (
     ("/quit", "leave Hermes for Tern"),
 )
 # Other spellings of this pane's commands: Hermes's `/title` is `/name` here.
-ALIASES = {"/exit": "/quit", "/title": "/name"}
+ALIASES = {"/exit": "/quit", "/title": "/name", "/sessions": "/resume"}
 # Hermes commands the list leaves out: they would swap the session out from under this pane, or they
 # drive Hermes's own terminal display, which Tern draws instead.
 HIDDEN = frozenset(
     {
-        "/new", "/reset", "/resume", "/sessions", "/session", "/switch", "/branch", "/fork", "/rename",
+        "/new", "/reset", "/session", "/switch", "/branch", "/fork", "/rename",
         "/redraw", "/skin", "/theme", "/theme-info", "/statusbar", "/sb", "/footer", "/indicator",
         "/battery", "/timestamps", "/density", "/details", "/detail", "/mouse", "/scroll", "/palette",
         "/copy", "/paste", "/image", "/prompt", "/compose", "/voice", "/terminal-setup", "/busy",
@@ -825,9 +826,41 @@ def model_rows(state: Conversation) -> list[dict]:
     return rows
 
 
+def ago(started: float) -> str:
+    """How long ago, the way a list of sessions says it: `just now`, `5 min`, `3 h`, `2 d`."""
+    seconds = max(0, time.time() - started)
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "min")):
+        if seconds >= size:
+            return f"{int(seconds // size)} {unit} ago"
+    return "just now"
+
+
+def session_label(row: dict) -> str:
+    """A session by its title, else by how it began."""
+    return (
+        str(row.get("title") or "").strip()
+        or " ".join(str(row.get("preview") or "").split())[:72]
+        or row["id"]
+    )
+
+
+def session_rows(state: Conversation) -> list[dict]:
+    """Hermes's recent sessions as sheet rows, newest first; a row's id is what a resume sends."""
+    rows = []
+    for row in state.sessions or []:
+        count = int(row.get("message_count") or 0)
+        detail = f"{count} message{'s' * (count != 1)}"
+        if row.get("started_at"):
+            detail += f" · {ago(float(row['started_at']))}"
+        if row["id"] == state.stored_session_id:
+            detail += " · this session"
+        rows.append({"id": row["id"], "label": session_label(row), "detail": detail})
+    return rows
+
+
 def sheet_rows(state: Conversation) -> list[dict]:
-    """The rows the sheet is showing: the catalog, filtered by what was typed."""
-    rows = model_rows(state)
+    """The rows the sheet is showing: the catalog or the sessions, filtered by what was typed."""
+    rows = session_rows(state) if state.sheet and state.sheet.kind == "sessions" else model_rows(state)
     query = (state.sheet.query if state.sheet else "").strip().lower()
     if not query:
         return rows
@@ -842,6 +875,10 @@ def sheet_cursor(state: Conversation) -> str:
     if not rows:
         return ""
     ids = [row["id"] for row in rows]
+    if state.sheet and state.sheet.kind == "sessions":
+        # The newest session other than this one: the likeliest to pick up.
+        here = state.sheet.chosen or next((i for i in ids if i != state.stored_session_id), "")
+        return here if here in ids else ids[0]
     here = (state.sheet.chosen if state.sheet else "") or current_model(state)
     return here if here in ids else ids[0]
 
@@ -866,7 +903,7 @@ def model_sheet(state: Conversation, events: Callable | None):
     """The model sheet over the dock: Hermes's catalog, filtered as you type, with the switch and
     cancel keys in its own bar. It owns the keyboard while it is open (see App.sheet_key)."""
     sheet = state.sheet
-    if sheet is None:
+    if sheet is None or sheet.kind != "model":
         return None
     rows = sheet_rows(state)
     chosen = sheet_cursor(state)
@@ -918,6 +955,44 @@ def model_sheet(state: Conversation, events: Callable | None):
         else None,
         role="model-sheet",
         key="sheet",
+    )
+
+
+def sessions_sheet(state: Conversation, events: Callable | None):
+    """The sessions sheet `/resume` opens over the dock: Hermes's recent sessions, newest first,
+    filtered as you type; Enter picks the highlighted one up in this pane (see App.sheet_key)."""
+    sheet = state.sheet
+    if sheet is None or sheet.kind != "sessions":
+        return None
+    rows = sheet_rows(state)
+    chosen = sheet_cursor(state)
+    total = len(session_rows(state))
+    return ui.picker(
+        title="Resume a session",
+        subtitle=f"{len(rows)} of {total} match"
+        if sheet.query.strip()
+        else (f"{total} recent sessions" if state.sessions is not None else "asking Hermes…"),
+        items=rows,
+        order=[row["id"] for row in rows],
+        current=[chosen] if chosen else None,
+        selected=[state.stored_session_id] if state.stored_session_id else None,
+        total=len(rows),
+        empty="no session matches" if state.sessions else "asking Hermes…",
+        placeholder="type to filter",
+        noun="session",
+        size="md",
+        preview="none",
+        state="ready",
+        actions=[
+            {"id": "pick", "label": "Resume", "keys": ["enter"], "primary": True},
+            {"id": "close", "label": "Cancel", "keys": ["escape"], "end": True},
+        ],
+        on_select=(lambda event: events("pick", event.item)) if events else None,
+        on_action={"pick": (lambda _: events("confirm")), "close": (lambda _: events("cancel"))}
+        if events
+        else None,
+        role="sessions-sheet",
+        key="sessions",
     )
 
 
@@ -991,6 +1066,7 @@ def view(
     watch: Callable | None = None,
     unqueue: Callable | None = None,
     commands: Callable | None = None,
+    resume: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model_name = str(state.info.get("model") or "Connecting…")
@@ -1048,6 +1124,15 @@ def view(
                         ),
                         key="review",
                     ),
+                    # Picks the last conversation back up, when there is one to pick up.
+                    button(
+                        f"Continue “{session_label(state.earlier)[:32]}”",
+                        lambda: resume(state.earlier["id"]),
+                        primary=True,
+                        key="continue",
+                    )
+                    if state.earlier and resume
+                    else None,
                     class_="hft-actions",
                     key="suggestions",
                 ),
@@ -1225,6 +1310,7 @@ def view(
             if welcome
             else None,
             model_sheet(state, model),
+            sessions_sheet(state, model),
             subagent_sheet(state, watch),
             dispatches(
                 state.dispatches,

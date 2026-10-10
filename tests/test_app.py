@@ -732,3 +732,85 @@ def test_one_ctrl_c_never_leaves_two_in_a_row_do():
     instance.draft = Draft("half a thought", 14)
     instance.input(Key(name="c", ctrl=True))
     assert instance.draft.text == "" and not instance.exit
+
+
+LISTED = {
+    "sessions": [
+        {"id": "20261011_now", "title": "", "preview": "", "message_count": 0, "started_at": 0},
+        {"id": "20261010_ci", "title": "Flaky test hunt", "message_count": 12, "started_at": 1},
+        {
+            "id": "20261009_old",
+            "title": "",
+            "preview": "Plan the launch",
+            "message_count": 4,
+            "started_at": 1,
+        },
+    ]
+}
+
+
+def switching_app():
+    instance = ready_app()
+    instance.state.stored_session_id = "20261011_now"
+    instance.state.begin("hello")
+    instance.state.busy = False
+    return instance
+
+
+def test_resume_lists_sessions_and_picks_one_up_in_place():
+    instance = switching_app()
+    instance.run_command("/resume")
+    assert instance.state.sheet.kind == "sessions"
+    assert instance.backend.requests[-1][:2] == ("session.list", {"limit": 50})
+    answer(instance, "session.list", LISTED)
+    instance.input(Key(name="enter"))  # the newest session other than this one
+    assert instance.backend.requests[-1][:2] == ("session.resume", {"session_id": "20261010_ci", "cols": 100})
+    answer(instance, "session.resume", STORED)
+    state = instance.state
+    assert state.sheet is None and state.session_id == "live-2" and state.stored_session_id == "20261011_abc"
+    assert [row.kind for row in state.rows][0] == "user" and state.rows[0].text == "Why does CI fail?"
+    assert "hello" not in [row.text for row in state.rows]  # the old transcript is gone
+    assert instance.backend.requests[-1][:2] == ("session.close", {"session_id": "live"})
+
+
+def test_resume_refuses_mid_turn_and_says_when_you_are_already_there():
+    instance = switching_app()
+    instance.state.busy = True
+    instance.run_command("/resume 20261010_ci")
+    assert instance.state.rows[-1].text == "Finish or stop this turn before switching sessions."
+    instance.state.busy = False
+    instance.run_command("/resume 20261011_now")
+    assert instance.state.rows[-1].text == "This is the session you are in."
+    instance.run_command("/sessions")  # Hermes's spelling
+    assert instance.state.sheet.kind == "sessions"
+
+
+def test_a_failed_switch_leaves_this_session_as_it_was():
+    instance = switching_app()
+    instance.run_command("/resume nowhere")
+    answer(instance, "session.resume", error={"code": 4007, "message": "session not found"})
+    assert instance.state.session_id == "live" and instance.state.rows[0].text == "hello"
+    assert "Could not resume 'nowhere'" in instance.state.rows[-1].text
+    assert not any(method == "session.create" for method, _, _ in instance.backend.requests)
+
+
+def test_a_new_session_offers_the_last_one_on_the_welcome():
+    from tern_sdk.reconcile import View
+
+    from hermes_for_tern.views import view
+
+    instance = resuming_app()
+    answer(instance, "session.create", {"session_id": "live", "stored_session_id": "20261011_now"})
+    assert instance.backend.requests[-1][:2] == ("session.list", {"limit": 50})
+    answer(instance, "session.list", LISTED)
+    assert instance.state.earlier["id"] == "20261010_ci"  # not this new one, and not an empty one
+    picked = []
+    built = View.build(
+        view(instance.state, Draft(), Draft(), Path("/p"), *[lambda *a: None] * 5, resume=picked.append)
+    )
+    node = built.nodes()["layer.stage.welcome.suggestions.continue"]
+    assert built.nodes()["layer.stage.welcome.suggestions.continue.label"].wire()["p"]["text"] == (
+        "Continue “Flaky test hunt”"
+    )
+    node.handlers["action:click"](None)
+    assert picked == ["20261010_ci"]
