@@ -190,6 +190,9 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   quietly, on the status strip.
 - Follow-ups held while Hermes works can be taken back: each `queued · …` row carries its own `✕`,
   so a thought typed by mistake never has to be sent.
+- A command popup in the composer: a lone `/` opens every command this pane answers, filtered as you
+  type, with what each one does. Enter inserts it (ready for its argument), Escape puts it away, and a
+  slash mid-draft stays a slash.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
   the ring, with the new level floating above the composer under a lamp. The ring sends
   `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
@@ -218,6 +221,7 @@ and it never automatically approves a request.
 | Ctrl+C | Stop an active turn; clear a draft when idle; exit when idle with an empty draft |
 | Escape | Stop the active turn; deny a pending approval; put the model sheet away |
 | Ctrl+D with an empty draft | Exit |
+| `/` on an empty draft | Opens the command popup; type to filter, ↑/↓ to move, Enter to insert, Escape to close |
 | With the model sheet open | Type to filter, ↑/↓ to move the cursor, Enter to switch, Escape to close |
 | While watching a subagent | Type a line to steer it, Enter to send, Escape to stop watching |
 | Native selection / undo shortcuts | Handled through Tern's edit and undo events |
@@ -227,7 +231,7 @@ the turn ends, rather than discarding it. Digits only pick a clarification optio
 is still empty, so typing a number into a free-text answer types a number.
 
 `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit`, `/model`, `/btw`, `/bg`
-and `/name` are local commands, answered in the pane. A slash command Hermes does not implement is refused with a
+and `/name` are local commands, answered in the pane; a lone `/` lists them as you type. A slash command Hermes does not implement is refused with a
 pointer to `/help` rather than sent to the model.
 
 ## Restore the original command
@@ -311,13 +315,13 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 97 tests covering streaming/interim/final message ordering, paced
+The current suite contains 105 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
 approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
 the watched subagent and its steer, the render window, the session title and the
-follow-up queue, process disconnection, reversible launcher installation and demo
+follow-up queue, the composer's command popup, process disconnection, reversible launcher installation and demo
 completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 

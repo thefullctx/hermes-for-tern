@@ -1,6 +1,7 @@
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from tern_sdk.reconcile import View
 
@@ -709,3 +710,118 @@ def test_the_strip_says_which_segments_may_be_given_up():
     assert segs["dock.bar.newline"]["priority"] == 1  # the hint goes first
     assert segs["dock.bar.model"]["priority"] == 6
     assert segs["dock.bar.project"]["priority"] == 5
+
+
+def test_the_command_popup_offers_the_local_commands_with_what_they_do():
+    state = Conversation()
+    state.ready = True
+    state.open_palette()
+    events = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            commands=events.append,
+        )
+    )
+    node = built.nodes()["layer.commands"]
+    assert node.wire()["p"]["role"] == "command-palette"
+    items = node.wire()["p"]["items"]
+    assert [item["id"] for item in items] == [
+        "/model",
+        "/btw",
+        "/bg",
+        "/name",
+        "/cost",
+        "/doctor",
+        "/retry",
+        "/clear",
+        "/stop",
+        "/help",
+        "/quit",
+    ]
+    assert items[0]["label"] == "/model" and "catalog" in items[0]["detail"]
+    assert node.wire()["p"]["subtitle"] == "11 commands"
+    assert node.wire()["p"]["preview"] == "none"  # a compact list, not a preview pane
+    assert node.wire()["p"]["current"] == ["/model"]
+    # the popup's own keys are declared, so Tern shows them
+    assert [action["id"] for action in node.wire()["p"]["actions"]] == ["pick", "close"]
+    assert node.wire()["p"]["actions"][0]["keys"] == ["enter"]
+
+    state.filter_palette("bg")
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, commands=events.append)
+    )
+    node = built.nodes()["layer.commands"]
+    assert [item["id"] for item in node.wire()["p"]["items"]] == ["/bg"]
+    assert node.wire()["p"]["subtitle"] == "1 of 11 match"
+    state.filter_palette("zzz")
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, commands=events.append)
+    )
+    assert built.nodes()["layer.commands"].wire()["p"]["empty"] == "no command matches"
+
+
+def test_the_popups_insert_and_cancel_keys_run_their_callbacks():
+    state = Conversation()
+    state.ready = True
+    state.open_palette()
+    seen = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            commands=lambda action, value="": seen.append((action, value)),
+        )
+    )
+    node = built.nodes()["layer.commands"]
+    node.handlers["action:pick"](None)
+    node.handlers["action:close"](None)
+    assert seen == [("confirm", ""), ("cancel", "")]
+    # Tern draws the rows from `items`, so a picked row reaches the node's select handler
+    state.choose_command("/cost")
+    seen.clear()
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            commands=lambda action, value="": seen.append((action, value)),
+        )
+    )
+    node = built.nodes()["layer.commands"]
+    node.handlers["select"](SimpleNamespace(item="/cost"))
+    assert seen == [("pick", "/cost")]
+
+
+def test_the_popup_and_the_model_sheet_are_never_open_together():
+    state = Conversation()
+    state.ready = True
+    state.open_palette()
+    state.open_sheet()
+    built = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop))
+    assert "layer.commands" in built.nodes() and "layer.sheet" in built.nodes()
+    # picking /model from the popup inserts it and closes the popup, so they take turns
+    state.close_palette()
+    built = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop))
+    assert "layer.commands" not in built.nodes() and "layer.sheet" in built.nodes()

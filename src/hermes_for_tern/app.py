@@ -15,26 +15,14 @@ from .editor import Draft
 from .rpc import Backend
 from .state import SECRET_METHODS, TAIL, Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
-from .views import sheet_cursor, sheet_rows, view
+from .views import COMMAND_ROWS, command_rows, sheet_cursor, sheet_rows, view
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
-# What the composer can be told to do, all handled here rather than sent to the model.
-COMMANDS = (
-    "/help",
-    "/clear",
-    "/cost",
-    "/retry",
-    "/doctor",
-    "/stop",
-    "/quit",
-    "/exit",
-    "/model",
-    "/btw",
-    "/bg",
-    "/name",
-)
-HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model · /btw · /bg · /name"
+# What the composer can be told to do, all handled here rather than sent to the model. The list of
+# what each does lives beside the popup that offers it, so `/help` cannot drift from the keyboard.
+COMMANDS = tuple(name.split(" ")[0] for name, _ in COMMAND_ROWS) + ("/exit",)
+HELP = " · ".join(COMMANDS)
 
 
 class App:
@@ -133,6 +121,7 @@ class App:
                 self.secret,
                 self.watch_event,
                 self.state.unqueue,
+                self.palette_event,
             )
         )
         if self.backend:
@@ -452,6 +441,58 @@ class App:
         self.request("subagent.steer", self.scoped(subagent_id=watch.id, text=text))
         self.state.steer_watch("")
 
+    def palette_key(self, item) -> bool:
+        """The command popup owns the keyboard while it is open: type to filter, arrows to move,
+        Enter to insert the command into the composer, Escape to put it away. True when the key was
+        the popup's."""
+        palette = self.state.palette
+        if palette is None or item.ctrl or item.alt or item.meta:
+            return False
+        if item.name == "escape":
+            self.state.close_palette()
+        elif item.name == "enter":
+            self.insert_command()
+        elif item.name == "backspace":
+            # back to an empty query shows the whole list again, rather than closing it
+            self.state.filter_palette(palette.query[:-1])
+        elif item.name in ("up", "down"):
+            visible = [row["id"] for row in command_rows(palette.query)]
+            if visible:
+                # the first row is the cursor until a choice says otherwise
+                at = visible.index(palette.chosen) if palette.chosen in visible else 0
+                self.state.choose_command(
+                    visible[max(0, min(len(visible) - 1, at + (1 if item.name == "down" else -1)))]
+                )
+        elif item.text:
+            self.state.filter_palette(palette.query + item.text)
+        else:
+            return False
+        return True
+
+    def insert_command(self) -> None:
+        """Insert the chosen command into the composer, ready for its argument."""
+        palette = self.state.palette
+        if not palette:
+            return
+        rows = [row["id"] for row in command_rows(palette.query)]
+        chosen = palette.chosen or (rows[0] if rows else "")
+        self.state.close_palette()
+        if chosen:
+            self.draft.insert(chosen + " ")
+            self.state.touch()
+            if self.surface:
+                self.surface.focus("dock.composer")
+
+    def palette_event(self, action: str, value: str = "") -> None:
+        """The popup's own events: a row was picked, its insert key was pressed, or it was put away."""
+        if action == "pick":
+            self.state.choose_command(value)
+            self.insert_command()
+        elif action == "confirm":
+            self.insert_command()
+        elif action == "cancel":
+            self.state.close_palette()
+
     def watch_key(self, item) -> bool:
         """The watched child owns the keyboard while it is open: a line to steer it, Enter to
         send, Escape to stop watching. True when the key was the watch's."""
@@ -563,6 +604,8 @@ class App:
             self.side_question(text[len("/btw ") :].strip())
         elif text.startswith("/bg "):
             self.background_task(text[len("/bg ") :].strip())
+        elif text == "/exit":
+            self.exit = True
         elif text == "/stop":
             self.stop()
             self.draft = Draft()
@@ -646,10 +689,14 @@ class App:
                     draft.replace(0, len(draft.text), "")
                 else:
                     self.exit = True
+            elif self.palette_key(item):
+                pass
             elif self.sheet_key(item):
                 pass
             elif self.watch_key(item):
                 pass
+            elif item.text == "/" and not draft.text:
+                self.state.open_palette()
             elif self.choose_by_key(item):
                 pass
             elif item.name == "escape":

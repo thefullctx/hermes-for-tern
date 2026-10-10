@@ -14,6 +14,21 @@ from .state import SECRET_METHODS, Agent, Conversation, Dispatch, Question, Row
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
+# Every local command, with what it does. One list: the composer's popup, `/help`, and the refusal
+# that names them all read it, so they cannot drift apart.
+COMMAND_ROWS = (
+    ("/model", "switch the model over Hermes's catalog; /model <name> skips the sheet"),
+    ("/btw <question>", "ask beside the running turn"),
+    ("/bg <task>", "hand Hermes a task on a fresh agent"),
+    ("/name <title>", "name this session"),
+    ("/cost", "what this session has spent"),
+    ("/doctor", "launcher, backend, protocol and session"),
+    ("/retry", "send the last prompt again"),
+    ("/clear", "empty the transcript; Hermes still remembers"),
+    ("/stop", "stop the running turn"),
+    ("/help", "these commands, in the pane"),
+    ("/quit", "leave Hermes for Tern"),
+)
 
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
@@ -591,6 +606,55 @@ def signature(assets: dict[str, str] | None, use: str, height: int, *, role: str
     )
 
 
+def command_rows(query: str = "") -> list[dict]:
+    """The command popup's rows — one per local command, with what it does — filtered by what was
+    typed. An empty query offers all of them; the cursor and the drawing read the same list."""
+    rows = [
+        {"id": name.split(" ")[0], "label": name, "detail": detail, "mono": True}
+        for name, detail in COMMAND_ROWS
+    ]
+    typed = (query or "").strip().lower()
+    if not typed:
+        return rows
+    return [row for row in rows if typed in f"{row['label']} {row['detail']}".lower()]
+
+
+def command_palette(state: Conversation, events: Callable | None):
+    """The composer's command popup: every command this pane answers, filtered as you type. It owns
+    the keyboard while it is open (see App.palette_key)."""
+    palette = state.palette
+    if palette is None:
+        return None
+    visible = command_rows(palette.query)
+    total = len(command_rows())
+    here = palette.chosen or (visible[0]["id"] if visible else "")
+    return ui.picker(
+        title="Commands",
+        subtitle=f"{len(visible)} of {total} match" if palette.query.strip() else f"{total} commands",
+        items=visible,
+        order=[row["id"] for row in visible],
+        current=[here] if here else None,
+        selected=None,
+        total=len(visible),
+        empty="no command matches",
+        placeholder="type to filter",
+        noun="command",
+        size="md",
+        preview="none",
+        state="ready",
+        actions=[
+            {"id": "pick", "label": "Insert", "keys": ["enter"], "primary": True},
+            {"id": "close", "label": "Cancel", "keys": ["escape"], "end": True},
+        ],
+        on_select=(lambda event: events("pick", event.item)) if events else None,
+        on_action={"pick": (lambda _: events("confirm")), "close": (lambda _: events("cancel"))}
+        if events
+        else None,
+        role="command-palette",
+        key="commands",
+    )
+
+
 def model_rows(state: Conversation) -> list[dict]:
     """Every model Hermes offers, as picker rows. A row's id is the value a switch sends: the bare
     name when only one provider carries it (Hermes resolves the provider itself), otherwise
@@ -795,6 +859,7 @@ def view(
     secret: Draft | None = None,
     watch: Callable | None = None,
     unqueue: Callable | None = None,
+    commands: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model_name = str(state.info.get("model") or "Connecting…")
@@ -1013,6 +1078,7 @@ def view(
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
             model_sheet(state, model),
+            command_palette(state, commands),
             subagent_sheet(state, watch),
             dispatches(
                 state.dispatches,

@@ -244,6 +244,15 @@ class Sheet:
 
 
 @dataclass
+class Palette:
+    """The composer's command popup: what has been typed to filter it, and the row the cursor is
+    on. It opens on a lone `/` and closes when nothing is left to filter."""
+
+    query: str = ""
+    chosen: str = ""
+
+
+@dataclass
 class Watch:
     """One delegated child, watched: its live transcript, and the line being steered to it."""
 
@@ -297,6 +306,8 @@ class Conversation:
         self.sheet: Sheet | None = None
         # The watched delegated child (`subagent.tail`), when one is open.
         self.watch: Watch | None = None
+        # The composer's command popup, while a `/` is being typed.
+        self.palette: Palette | None = None
 
     def touch(self) -> None:
         self.revision += 1
@@ -735,6 +746,27 @@ class Conversation:
     def secret(self) -> Question | None:
         """A pending one-string ask (a password, a key, a code), when Hermes is waiting for one."""
         return next((q for q in self.questions.values() if q.method in SECRET_METHODS), None)
+
+    def open_palette(self) -> None:
+        if self.palette is None:
+            self.palette = Palette()
+        self.touch()
+
+    def close_palette(self) -> None:
+        if self.palette is not None:
+            self.palette = None
+            self.touch()
+
+    def filter_palette(self, text: str) -> None:
+        if self.palette:
+            self.palette.query = text
+            self.palette.chosen = ""
+            self.touch()
+
+    def choose_command(self, value: str) -> None:
+        if self.palette:
+            self.palette.chosen = value
+            self.touch()
 
     def open_watch(self, subagent_id: str) -> None:
         if self.watch is None or self.watch.id != subagent_id:

@@ -518,3 +518,80 @@ def test_a_held_follow_up_can_be_taken_back():
     assert instance.state.queued == ["second"]
     instance.state.unqueue(5)
     assert instance.state.queued == ["second"]
+
+
+def test_a_lone_slash_opens_the_command_popup_and_typing_filters_it():
+    instance = app()
+    instance.state.ready = True
+    instance.input(Key(name="/", text="/"))
+    assert instance.state.palette is not None
+    assert instance.draft.text == ""  # the slash goes to the popup, not the composer
+    for char in "mod":
+        instance.input(Key(name=char, text=char))
+    instance.input(Key(name="enter"))
+    assert instance.draft.text == "/model "
+    assert instance.state.palette is None
+    # a slash in the middle of a draft is just a slash
+    instance.draft = Draft("what is / about", 8)
+    instance.input(Key(name="/", text="/"))
+    assert instance.state.palette is None
+    assert instance.draft.text == "what is // about"
+
+
+def test_the_popup_offers_every_local_command_and_filters_by_what_it_does():
+    instance = app()
+    instance.state.ready = True
+    from hermes_for_tern.views import command_rows
+
+    assert [row["id"] for row in command_rows()] == [
+        "/model",
+        "/btw",
+        "/bg",
+        "/name",
+        "/cost",
+        "/doctor",
+        "/retry",
+        "/clear",
+        "/stop",
+        "/help",
+        "/quit",
+    ]
+    # `/exit` is an alias of `/quit`: it works, and the popup offers one spelling per command
+    assert [row["id"] for row in command_rows("spent")] == ["/cost"]
+    assert [row["id"] for row in command_rows("zz")] == []
+    instance.input(Key(name="/", text="/"))
+    instance.input(Key(name="escape"))
+    assert instance.state.palette is None
+
+
+def test_the_popup_moves_with_the_arrows_and_backspace_puts_it_away():
+    from hermes_for_tern.views import command_rows
+
+    instance = app()
+    instance.state.ready = True
+    instance.input(Key(name="/", text="/"))
+    instance.input(Key(name="down"))
+    instance.input(Key(name="enter"))
+    assert instance.draft.text == "/btw "
+    assert instance.state.palette is None  # inserting puts the popup away
+
+    # a fresh popup, filtered, then filtered back to nothing: it closes itself
+    instance.draft = Draft("", 0)
+    instance.input(Key(name="/", text="/"))
+    instance.input(Key(name="b", text="b"))
+    assert instance.state.palette.query == "b"
+    instance.input(Key(name="backspace"))
+    assert instance.state.palette.query == ""  # an empty query shows the whole list again
+    assert [row["id"] for row in command_rows("")] == [
+        "/model",
+        "/btw",
+        "/bg",
+        "/name",
+        "/cost",
+        "/doctor",
+        "/retry",
+        "/clear",
+        "/stop",
+        "/help",
+        "/quit",
+    ]
