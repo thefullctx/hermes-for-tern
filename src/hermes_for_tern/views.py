@@ -797,7 +797,7 @@ def view(
     unqueue: Callable | None = None,
 ) -> dict:
     assets = assets or {}
-    model = str(state.info.get("model") or "Connecting…")
+    model_name = str(state.info.get("model") or "Connecting…")
     # Each turn is its own column, so a gold thread can run down its gutter.
     turns: list[tuple[str, list[Row]]] = []
     for row in state.rows:
@@ -829,7 +829,7 @@ def view(
                 ui.html.p("Your agent, at home in Tern.", class_="hft-tagline", key="intro"),
                 ui.html.div(
                     ui.html.span(ui.html.span("PROJECT", class_="hft-context-label"), cwd.name),
-                    ui.html.span(ui.html.span("MODEL", class_="hft-context-label"), model),
+                    ui.html.span(ui.html.span("MODEL", class_="hft-context-label"), model_name),
                     ui.html.span(
                         ui.html.span("SESSION", class_="hft-context-label"), state.title or "unnamed"
                     ),
@@ -957,7 +957,7 @@ def view(
             ui.seg("SIMULATED DEMO", role="demo", key="demo") if state.info.get("demo") else None,
             ui.seg(state.title, key="title", priority=2) if state.title else None,
             ui.seg(
-                model,
+                model_name,
                 icon="brain",
                 key="model",
                 priority=6,

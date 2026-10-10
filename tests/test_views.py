@@ -280,6 +280,75 @@ def test_a_held_follow_up_is_shown_in_the_dock_and_counted():
     assert sorted(counts) == ["1/2", "2/2"]
 
 
+def test_clicking_the_model_name_runs_the_handler_it_registered():
+    # `view()` has a local for the model *name* and a parameter for the sheet's callback; the name
+    # shadows the parameter, so a registered-but-never-called handler is how this crashed once.
+    state = Conversation()
+    state.ready = True
+    state.info = {"model": "muse-spark-1.3"}
+    opened = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            model=lambda action, value="": opened.append((action, value)),
+        )
+    )
+    node = built.nodes()["dock.bar.model"]
+    node.handlers["action:click"](None)  # what Tern sends when the segment is clicked
+    assert opened == [("open", "")]
+
+
+def test_every_registered_click_in_a_view_runs_the_callback_it_was_given():
+    # One pass over the whole view: each registered action must be a call that does not raise, so
+    # a handler bound to data instead of to its parameter cannot ship again.
+    state = Conversation()
+    state.ready = True
+    state.begin("audit the tests")
+    state.event("subagent.start", {"subagent_id": "a1", "goal": "check the tests", "task_index": 0})
+    state.event("tool.complete", {"tool_id": "t", "name": "terminal", "result": {"output": "ok"}})
+    state.open_sheet()
+    state.models = {
+        "providers": [{"slug": "nous", "name": "Nous", "models": ["muse-spark-1.3"], "authenticated": True}]
+    }
+    state.info = {"model": "muse-spark-1.3", "provider": "nous"}
+    seen = []
+    tree = view(
+        state,
+        Draft(),
+        Draft(),
+        Path("/p"),
+        noop,
+        noop,
+        noop,
+        noop,
+        noop,
+        noop,
+        None,
+        noop,
+        noop,
+        model=lambda *args: seen.append(("model", args)),
+        watch=lambda sid: seen.append(("watch", sid)),
+    )
+    clicks = 0
+    for region in ("main", "layer", "dock"):
+        for node in getattr(View.build(tree), region).walk():
+            for name, handler in node.handlers.items():
+                if name.startswith("action:"):
+                    clicks += 1
+                    handler(None)
+    assert clicks >= 3, clicks  # the model name, the sheet's rows and its bar, the child's row
+    assert ("open",) in [args for name, args in seen if name == "model"]
+    assert ("watch", "a1") in seen
+
+
 def test_the_queue_hint_only_appears_while_hermes_is_actually_working():
     state = Conversation()
     state.ready = True
