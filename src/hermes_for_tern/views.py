@@ -14,8 +14,9 @@ from .state import SECRET_METHODS, Agent, Conversation, Dispatch, Question, Row
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
-# Every local command, with what it does. One list: the composer's popup, `/help`, and the refusal
-# that names them all read it, so they cannot drift apart.
+# The commands this pane answers itself, because they draw or change something in Tern, with what
+# each does. Every other `/command` is Hermes's own and goes to it. One list: the composer's command
+# list and `/help` both read it, so they cannot drift apart.
 COMMAND_ROWS = (
     ("/model", "switch the model over Hermes's catalog; /model <name> skips the sheet"),
     ("/btw <question>", "ask beside the running turn"),
@@ -23,12 +24,28 @@ COMMAND_ROWS = (
     ("/name <title>", "name this session"),
     ("/cost", "what this session has spent"),
     ("/doctor", "launcher, backend, protocol and session"),
-    ("/retry", "send the last prompt again"),
     ("/clear", "empty the transcript; Hermes still remembers"),
     ("/stop", "stop the running turn"),
-    ("/help", "these commands, in the pane"),
+    ("/help", "Hermes's commands, and these"),
     ("/quit", "leave Hermes for Tern"),
 )
+# Other spellings of this pane's commands: Hermes's `/title` is `/name` here.
+ALIASES = {"/exit": "/quit", "/title": "/name"}
+# Hermes commands the list leaves out: they would swap the session out from under this pane, or they
+# drive Hermes's own terminal display, which Tern draws instead.
+HIDDEN = frozenset(
+    {
+        "/new", "/reset", "/resume", "/sessions", "/session", "/switch", "/branch", "/fork", "/rename",
+        "/redraw", "/skin", "/theme", "/theme-info", "/statusbar", "/sb", "/footer", "/indicator",
+        "/battery", "/timestamps", "/density", "/details", "/detail", "/mouse", "/scroll", "/palette",
+        "/copy", "/paste", "/image", "/prompt", "/compose", "/voice", "/terminal-setup", "/busy",
+        "/verbose", "/pet", "/hatch", "/fortune", "/heapdump", "/mem", "/widgets-reload",
+    }
+)  # fmt: skip
+# Hermes describes an alias as "(alias for /name)"; the list offers each command once.
+ALIAS_OF = re.compile(r"\(alias for /")
+# Rows the command list shows at once; the rest scroll into view under the arrow keys.
+SLASH_ROWS = 8
 
 # Markup would split a mark across rendered elements, so such runs are left unmarked.
 MARKUP = set("*_`[]()#<>|~\\\n")
@@ -386,6 +403,21 @@ def transcript_row(
             role="tool",
             on_toggle=lambda e: fold(row, state, e.collapsed),
         )
+    if row.kind == "command":
+        # A slash command's answer from Hermes, drawn like a finished tool: its name, then its output
+        # folded to a few lines that open in place.
+        return ui.tool(
+            ui.text(row.text, key="output", role="command-output"),
+            name="command",
+            title=row.name,
+            status="done",
+            collapsible=True,
+            collapsed=row.collapsed,
+            preview={"lines": 5},
+            key=row.key,
+            role="tool",
+            on_toggle=lambda e: fold(row, state, e.collapsed),
+        )
     if row.kind == "user":
         return ui.card(ui.text(row.text, key="body"), variant="bare", role="message-user", key=row.key)
     if row.kind == "assistant":
@@ -606,53 +638,151 @@ def signature(assets: dict[str, str] | None, use: str, height: int, *, role: str
     )
 
 
-def command_rows(query: str = "") -> list[dict]:
-    """The command popup's rows — one per local command, with what it does — filtered by what was
-    typed. An empty query offers all of them; the cursor and the drawing read the same list."""
-    rows = [
-        {"id": name.split(" ")[0], "label": name, "detail": detail, "mono": True}
+def slash_typed(text: str) -> tuple[str, bool] | None:
+    """The draft as a command being typed: its `/name`, and whether its argument has begun. None when
+    it is prose: no leading slash, a second slash (`/usr/local`), or more than one line."""
+    if not text.startswith("/") or "\n" in text:
+        return None
+    name, space, _ = text.partition(" ")
+    if "/" in name[1:]:
+        return None
+    return name.lower(), bool(space)
+
+
+def local_rows() -> list[dict]:
+    return [
+        {
+            "name": name.split(" ")[0],
+            "label": name,
+            "detail": detail,
+            "insert": name.split(" ")[0],
+            "local": True,
+        }
         for name, detail in COMMAND_ROWS
     ]
-    typed = (query or "").strip().lower()
-    if not typed:
+
+
+def slash_rows(state: Conversation, text: str) -> list[dict]:
+    """The command list for the draft `text`: this pane's own commands, then Hermes's commands and
+    skills (`complete.slash`), or, once an argument has begun, Hermes's suggestions for it. Each row
+    knows what replaces the draft from where. Until Hermes answers this very draft, its last answer
+    stands, narrowed to what is still typed, so the list never blinks between keystrokes."""
+    typed = slash_typed(text)
+    if typed is None:
+        return []
+    name, arguing = typed
+    slash = state.slash
+    fresh = slash.answered == text
+    if arguing:
+        if name in {row["name"] for row in local_rows()} or ALIASES.get(name):
+            return []  # this pane's commands take free text
+        start = slash.replace_from if 0 < slash.replace_from <= len(text) else len(text)
+        fragment = text[start:].lower()
+        rows = []
+        for item in slash.items:
+            insert = str(item.get("text") or "")
+            if not insert or (not fresh and fragment not in insert.lower()):
+                continue
+            rows.append(
+                {
+                    "name": str(item.get("display") or insert).strip(),
+                    "detail": usage_free(str(item.get("meta") or "")),
+                    "insert": insert,
+                    "from": start,
+                    "skill": item.get("kind") == "skill",
+                }
+            )
         return rows
-    return [row for row in rows if typed in f"{row['label']} {row['detail']}".lower()]
+    fragment = name[1:]
+    # Names outrank descriptions, as in Hermes's own ranking: this pane's commands named like the
+    # draft, then Hermes's, then this pane's that only mention it.
+    rows = [row for row in local_rows() if fragment in row["name"][1:]]
+    mentions = [
+        row
+        for row in local_rows()
+        if fragment and fragment not in row["name"][1:] and fragment in row["detail"].lower()
+    ]
+    taken = {row["name"] for row in local_rows()} | set(ALIASES) | HIDDEN
+    for item in slash.items if not slash.answered.partition(" ")[1] else ():
+        insert = str(item.get("text") or "").strip()
+        shown = "/" + insert
+        if not insert or shown.lower() in taken or (not fresh and fragment not in insert.lower()):
+            continue
+        if ALIAS_OF.search(str(item.get("meta") or "")):
+            continue  # one row per command: typing an alias still works, Hermes resolves it
+        taken.add(shown.lower())
+        rows.append(
+            {
+                "name": shown,
+                "detail": usage_free(str(item.get("meta") or "")),
+                "insert": shown,
+                "skill": item.get("kind") == "skill",
+            }
+        )
+    return rows + mentions
 
 
-def command_palette(state: Conversation, events: Callable | None):
-    """The composer's command popup: every command this pane answers, filtered as you type. It owns
-    the keyboard while it is open (see App.palette_key)."""
-    palette = state.palette
-    if palette is None:
+def usage_free(meta: str) -> str:
+    """Hermes's description of a command, without the `(usage: …)` tail the composer cannot show."""
+    return re.sub(r"\s*\(usage:.*\)\s*$", "", meta).strip()
+
+
+def slash_window(rows: list, cursor: int) -> tuple[int, int]:
+    """The SLASH_ROWS rows to show, keeping the highlighted one in view."""
+    if len(rows) <= SLASH_ROWS:
+        return 0, len(rows)
+    top = min(max(0, cursor - SLASH_ROWS + 1), len(rows) - SLASH_ROWS)
+    top = min(top, cursor)
+    return top, top + SLASH_ROWS
+
+
+def slash_open(state: Conversation, draft: Draft) -> bool:
+    """Whether the command list shows: the draft is a command being typed, it has rows, and Escape
+    has not put the list away for this very draft."""
+    return state.slash.put_away != draft.text and bool(slash_rows(state, draft.text))
+
+
+def slash_list(state: Conversation, draft: Draft, pick: Callable | None):
+    """The composer's live command list, drawn right above it: one line per command with what it
+    does, the highlighted one marked. It grows and shrinks with every keystroke (see App.slash_key)."""
+    if not slash_open(state, draft):
         return None
-    visible = command_rows(palette.query)
-    total = len(command_rows())
-    here = palette.chosen or (visible[0]["id"] if visible else "")
-    return ui.picker(
-        title="Commands",
-        subtitle=f"{len(visible)} of {total} match" if palette.query.strip() else f"{total} commands",
-        items=visible,
-        order=[row["id"] for row in visible],
-        current=[here] if here else None,
-        selected=None,
-        total=len(visible),
-        empty="no command matches",
-        placeholder="type to filter",
-        noun="command",
-        size="md",
-        preview="none",
-        state="ready",
-        actions=[
-            {"id": "pick", "label": "Insert", "keys": ["enter"], "primary": True},
-            {"id": "close", "label": "Cancel", "keys": ["escape"], "end": True},
-        ],
-        on_select=(lambda event: events("pick", event.item)) if events else None,
-        on_action={"pick": (lambda _: events("confirm")), "close": (lambda _: events("cancel"))}
-        if events
-        else None,
-        role="command-palette",
-        key="commands",
-    )
+    rows = slash_rows(state, draft.text)
+    cursor = min(state.slash.cursor, len(rows) - 1)
+    top, bottom = slash_window(rows, cursor)
+    lines = []
+    for index in range(top, bottom):
+        row = rows[index]
+        current = index == cursor
+        lines.append(
+            ui.row(
+                ui.text(row["name"], key="name", role="slash-name"),
+                ui.text("skill", key="kind", role="slash-kind") if row.get("skill") else None,
+                ui.text(row["detail"], key="detail", role="slash-detail") if row["detail"] else None,
+                role="slash-current" if current else "slash-row",
+                key=f"row-{row['name']}",
+                on_click=(lambda _, at=index: pick(at)) if pick else None,
+            )
+        )
+    more = len(rows) - bottom
+    if top or more:
+        shown = f"{top + 1}–{bottom} of {len(rows)}"
+        lines.append(ui.text(f"{shown} · ↑↓ to see more", role="slash-more", key="more"))
+    return ui.col(*lines, gap="none", role="slash-list", key="slash")
+
+
+def slash_ghost(state: Conversation, draft: Draft) -> str | None:
+    """The rest of the highlighted command, shown faintly after the caret while its name is typed."""
+    if not slash_open(state, draft) or draft.cursor != len(draft.text):
+        return None
+    typed = slash_typed(draft.text)
+    if typed is None or typed[1]:
+        return None
+    rows = slash_rows(state, draft.text)
+    name = rows[min(state.slash.cursor, len(rows) - 1)]["name"]
+    if name.lower().startswith(typed[0]) and len(name) > len(typed[0]):
+        return name[len(typed[0]) :]
+    return None
 
 
 def model_rows(state: Conversation) -> list[dict]:
@@ -948,10 +1078,13 @@ def view(
         dock.append(
             ui.meter(min(1.0, fuel / 100), thresholds={"warn": 0.8, "bad": 0.95}, role="fuel", key="fuel")
         )
+    if not secret_ask and not clarification:
+        dock.append(slash_list(state, draft, commands))
     dock.append(
         ui.editor(
             mask(active_draft.text) if secret_ask else active_draft.text,
             cursor=active_draft.caret,
+            ghost=None if secret_ask or clarification else slash_ghost(state, draft),
             key="composer",
             role="composer",
             tone="pending" if state.busy else None,
@@ -1076,9 +1209,17 @@ def view(
             ),
         ),
         "layer": ui.col(
-            ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
+            # The welcome fades while the command list is open, which would sit over it; only its
+            # class changes, so its entrance does not play again when the list closes.
+            ui.html.div(
+                *rows,
+                class_="hft-welcome-stage" + (" hft-tucked" if slash_open(state, draft) else ""),
+                role="stage",
+                key="stage",
+            )
+            if welcome
+            else None,
             model_sheet(state, model),
-            command_palette(state, commands),
             subagent_sheet(state, watch),
             dispatches(
                 state.dispatches,

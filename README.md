@@ -168,7 +168,11 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   only the ones a key can reach are numbered.
 - Follow-ups composed while Hermes works are queued and sent when the turn ends, shown above the
   composer as `queued · …` so nothing typed is dropped.
-- Local commands: `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit`.
+- Slash commands: Hermes's own (`/compress`, `/undo`, `/context`, `/usage`, `/plan`, `/goal`, …), your
+  skills, and this pane's `/model`, `/btw`, `/bg`, `/name`, `/cost`, `/doctor`, `/clear`, `/stop`,
+  `/help` and `/quit`. Hermes runs its commands the way its own terminal does (`slash.exec`, then
+  `command.dispatch` for skills and commands that need the live session) and refuses what may not run
+  mid-turn itself. A short answer is a note; a long one folds to a few lines that open in place.
   `/doctor` reports the launcher, backend command, protocol version and session in the pane.
 - The model sheet: `/model` (or a click on the model name in the status strip) opens Hermes's whole
   catalog as a native sheet over the composer — every model of every provider, with its price and
@@ -190,9 +194,13 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   quietly, on the status strip.
 - Follow-ups held while Hermes works can be taken back: each `queued · …` row carries its own `✕`,
   so a thought typed by mistake never has to be sent.
-- A command popup in the composer: a lone `/` opens every command this pane answers, filtered as you
-  type, with what each one does. Enter inserts it (ready for its argument), Escape puts it away, and a
-  slash mid-draft stays a slash.
+- A live command list in the composer: typing `/` opens a list right above it, one line per command
+  with what it does, Hermes's commands and your skills included (`complete.slash`), and each letter
+  narrows it; once a command takes an argument it offers Hermes's choices for that (`/personality `).
+  The rest of the highlighted command shows faintly after the caret. ↑/↓ move, Tab completes, Enter
+  runs it (`/btw`, `/bg` and `/name` wait for their argument instead), and Escape puts it away. Commands
+  that would swap the session out from under the pane, or that drive Hermes's own terminal display,
+  are left out; a slash mid-draft stays a slash.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
   the ring, with the new level floating above the composer under a lamp. The ring sends
   `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
@@ -221,7 +229,7 @@ and it never automatically approves a request.
 | Ctrl+C | Stop an active turn; clear a draft when idle; exit when idle with an empty draft |
 | Escape | Stop the active turn; deny a pending approval; put the model sheet away |
 | Ctrl+D with an empty draft | Exit |
-| `/` on an empty draft | Opens the command popup; type to filter, ↑/↓ to move, Enter to insert, Escape to close |
+| `/` on an empty draft | Opens the command list; keep typing to narrow it, ↑/↓ to move, Tab to complete, Enter to run, Escape to close |
 | With the model sheet open | Type to filter, ↑/↓ to move the cursor, Enter to switch, Escape to close |
 | While watching a subagent | Type a line to steer it, Enter to send, Escape to stop watching |
 | Native selection / undo shortcuts | Handled through Tern's edit and undo events |
@@ -230,9 +238,9 @@ The composer stays editable while Hermes works: `Enter` holds your message and s
 the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
 is still empty, so typing a number into a free-text answer types a number.
 
-`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit`, `/model`, `/btw`, `/bg`
-and `/name` are local commands, answered in the pane; a lone `/` lists them as you type. A slash command Hermes does not implement is refused with a
-pointer to `/help` rather than sent to the model.
+`/model`, `/btw`, `/bg`, `/name` (also `/title`), `/cost`, `/doctor`, `/clear`, `/stop`, `/help` and
+`/quit` (also `/exit`) are answered in the pane; every other slash command goes to Hermes, which runs
+it or says it does not know it. Nothing typed after a `/` is sent to the model as a message.
 
 ## Restore the original command
 
@@ -274,8 +282,8 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 One live conversation per process. Session browsing/resume, restart recovery, attachments,
 voice and desktop browser bridges are not implemented. A session that runs for hundreds of turns
 draws its newest 60 and says how many are left out (`… N earlier turns`), so a pane stays responsive
-however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Slash commands are limited to
-the local set above; anything meant for the model is refused rather than forwarded.
+however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Hermes commands that switch sessions
+(`/new`, `/resume`, `/branch`, …) are not offered, since the pane follows one session.
 Subagents show their goal, status, current tool and totals, nested by parent; click one to watch its
 live transcript, steer it a line or interrupt it. The visual demo shows
 sequential work phases, not subagents.
@@ -315,13 +323,13 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 105 tests covering streaming/interim/final message ordering, paced
+The current suite contains 108 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
 approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
 the watched subagent and its steer, the render window, the session title and the
-follow-up queue, the composer's command popup, process disconnection, reversible launcher installation and demo
+follow-up queue, the composer's live command list and Hermes's slash commands, process disconnection, reversible launcher installation and demo
 completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 

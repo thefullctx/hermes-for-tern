@@ -15,14 +15,18 @@ from .editor import Draft
 from .rpc import Backend
 from .state import SECRET_METHODS, TAIL, Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
-from .views import COMMAND_ROWS, command_rows, sheet_cursor, sheet_rows, view
+from .views import ALIASES, COMMAND_ROWS, sheet_cursor, sheet_rows, slash_open, slash_rows, slash_typed, view
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
-# What the composer can be told to do, all handled here rather than sent to the model. The list of
-# what each does lives beside the popup that offers it, so `/help` cannot drift from the keyboard.
-COMMANDS = tuple(name.split(" ")[0] for name, _ in COMMAND_ROWS) + ("/exit",)
-HELP = " · ".join(COMMANDS)
+# The commands this pane answers itself; every other `/command` is Hermes's. What each does lives
+# beside the list that offers them, so `/help` cannot drift from the keyboard.
+COMMANDS = tuple(name.split(" ")[0] for name, _ in COMMAND_ROWS)
+HELP = "In this pane: " + " · ".join(COMMANDS)
+# `slash.exec` refusals that mean "not mine, ask command.dispatch" (skills, bundles, pending input).
+DISPATCH_CODES = (4011, 4018)
+# Output longer than this folds into a row of its own instead of a one-line note.
+NOTE_CHARS, NOTE_LINES = 180, 2
 
 
 class App:
@@ -44,10 +48,16 @@ class App:
         self.pending: list[tuple[str, Future, float]] = []
         self.start_deadline = time.monotonic() + 60
         self._ack_approvals: list[str] = []
+        # What each in-flight slash request was for: the draft a completion answers, or the command.
+        self.asked: dict[Future, str] = {}
+        self.completing: Future | None = None
+        self.typed = ""  # the draft the command list's cursor was placed for
 
-    def request(self, method: str, params: dict | None = None) -> None:
+    def request(self, method: str, params: dict | None = None) -> Future:
         assert self.backend
-        self.pending.append((method, self.backend.request(method, params), time.monotonic() + 60))
+        future = self.backend.request(method, params)
+        self.pending.append((method, future, time.monotonic() + 60))
+        return future
 
     def scoped(self, **params) -> dict:
         return {"session_id": self.state.session_id, **params}
@@ -121,7 +131,7 @@ class App:
                 self.secret,
                 self.watch_event,
                 self.state.unqueue,
-                self.palette_event,
+                self.pick_command,
             )
         )
         if self.backend:
@@ -182,7 +192,9 @@ class App:
         for method, future, deadline in batch:
             if not future.done():
                 if time.monotonic() > deadline:
-                    if method in ("session.create", "client.capabilities"):
+                    if method == "complete.slash":
+                        self.asked.pop(future, None)  # the list keeps this pane's own commands
+                    elif method in ("session.create", "client.capabilities"):
                         self.fail(f"Timed out waiting for {method}.")
                     else:
                         self.state.add(
@@ -228,8 +240,21 @@ class App:
                     self.state.watch_tail(result)
                 elif method in ("subagent.interrupt", "subagent.steer"):
                     self.steer_result(method, result)
+                elif method == "complete.slash":
+                    text = self.asked.pop(future, None)
+                    if text is not None and future is self.completing:
+                        self.state.completions(text, result)
+                elif method in ("slash.exec", "command.dispatch"):
+                    self.command_result(self.asked.pop(future, ""), result)
             except Exception as exc:
-                if method in ("client.capabilities", "session.create"):
+                if method == "complete.slash":
+                    self.asked.pop(future, None)
+                elif method == "slash.exec" and getattr(exc, "code", None) in DISPATCH_CODES:
+                    self.dispatch(self.asked.pop(future, ""))
+                elif method in ("slash.exec", "command.dispatch"):
+                    command = self.asked.pop(future, "")
+                    self.state.add("notice", f"{command.split(' ')[0]}: {exc}")
+                elif method in ("client.capabilities", "session.create"):
                     self.fail(str(exc))
                 else:
                     self.state.add("error", str(exc))
@@ -441,57 +466,69 @@ class App:
         self.request("subagent.steer", self.scoped(subagent_id=watch.id, text=text))
         self.state.steer_watch("")
 
-    def palette_key(self, item) -> bool:
-        """The command popup owns the keyboard while it is open: type to filter, arrows to move,
-        Enter to insert the command into the composer, Escape to put it away. True when the key was
-        the popup's."""
-        palette = self.state.palette
-        if palette is None or item.ctrl or item.alt or item.meta:
+    def slash_key(self, item) -> bool:
+        """The command list answers the keyboard while it shows: arrows move, Tab completes the
+        highlighted command, Enter runs it (or completes one that still needs its argument), and
+        Escape puts the list away until the draft changes. True when the key was the list's."""
+        if item.ctrl or item.alt or item.meta or self.state.secret() or self.state.clarify():
             return False
-        if item.name == "escape":
-            self.state.close_palette()
-        elif item.name == "enter":
-            self.insert_command()
-        elif item.name == "backspace":
-            # back to an empty query shows the whole list again, rather than closing it
-            self.state.filter_palette(palette.query[:-1])
-        elif item.name in ("up", "down"):
-            visible = [row["id"] for row in command_rows(palette.query)]
-            if visible:
-                # the first row is the cursor until a choice says otherwise
-                at = visible.index(palette.chosen) if palette.chosen in visible else 0
-                self.state.choose_command(
-                    visible[max(0, min(len(visible) - 1, at + (1 if item.name == "down" else -1)))]
-                )
-        elif item.text:
-            self.state.filter_palette(palette.query + item.text)
+        if self.state.sheet or self.state.watch or not slash_open(self.state, self.draft):
+            return False
+        rows = slash_rows(self.state, self.draft.text)
+        at = min(self.state.slash.cursor, len(rows) - 1)
+        if item.name in ("up", "down"):
+            self.state.slash.cursor = (at + (1 if item.name == "down" else -1)) % len(rows)
+        elif item.name == "tab":
+            self.complete_command(rows[at])
+        elif item.name == "enter" and not item.shift:
+            self.complete_command(rows[at], run=True)
+        elif item.name == "escape":
+            self.state.slash.put_away = self.draft.text
         else:
             return False
+        self.state.touch()
         return True
 
-    def insert_command(self) -> None:
-        """Insert the chosen command into the composer, ready for its argument."""
-        palette = self.state.palette
-        if not palette:
-            return
-        rows = [row["id"] for row in command_rows(palette.query)]
-        chosen = palette.chosen or (rows[0] if rows else "")
-        self.state.close_palette()
-        if chosen:
-            self.draft.insert(chosen + " ")
-            self.state.touch()
-            if self.surface:
-                self.surface.focus("dock.composer")
+    def complete_command(self, row: dict, *, run: bool = False) -> None:
+        """Put the row into the draft. Run it too when asked, unless it is one of this pane's
+        commands that needs its argument (`/btw`, `/bg`, `/name`): those wait for it."""
+        start = row.get("from")
+        if start is None:
+            text = row["insert"] + " "
+        else:
+            text = self.draft.text[:start] + row["insert"]
+        self.draft = Draft(text, len(text))
+        self.state.slash.cursor = 0
+        needs_argument = row.get("local") and "<" in row.get("label", "")
+        if run and not needs_argument:
+            self.submit(text)
+        elif self.surface:
+            self.surface.focus("dock.composer")
 
-    def palette_event(self, action: str, value: str = "") -> None:
-        """The popup's own events: a row was picked, its insert key was pressed, or it was put away."""
-        if action == "pick":
-            self.state.choose_command(value)
-            self.insert_command()
-        elif action == "confirm":
-            self.insert_command()
-        elif action == "cancel":
-            self.state.close_palette()
+    def pick_command(self, index: int) -> None:
+        """A click on a row of the command list completes it, ready for an argument."""
+        rows = slash_rows(self.state, self.draft.text)
+        if 0 <= index < len(rows):
+            self.complete_command(rows[index])
+            self.state.touch()
+
+    def ask_completions(self) -> None:
+        """Ask Hermes what completes the draft, once per draft, while a command is being typed."""
+        text = self.draft.text
+        if self.state.slash.put_away is not None and self.state.slash.put_away != text:
+            self.state.slash.put_away = None
+        if (
+            slash_typed(text) is None
+            or not self.backend
+            or not self.state.session_id
+            or text in self.asked.values()
+            or self.state.slash.answered == text
+        ):
+            return
+        if self.completing is not None and self.completing in self.asked:
+            self.asked.pop(self.completing)  # a newer draft makes the older answer moot
+        self.completing = self.request("complete.slash", self.scoped(text=text))
+        self.asked[self.completing] = text
 
     def watch_key(self, item) -> bool:
         """The watched child owns the keyboard while it is open: a line to steer it, Enter to
@@ -589,7 +626,10 @@ class App:
         self.request("prompt.submit", self.scoped(text=text))
 
     def run_command(self, text: str) -> None:
-        """One of COMMANDS, answered here; anything else starting with `/` is not one."""
+        """One of COMMANDS, answered here; every other `/command` is Hermes's to run."""
+        name, space, rest = text.partition(" ")
+        if ALIASES.get(name.lower()):
+            text = ALIASES[name.lower()] + space + rest
         if text in ("/quit", "/exit"):
             self.exit = True
         elif text == "/model":
@@ -610,7 +650,7 @@ class App:
             self.stop()
             self.draft = Draft()
         elif text == "/help":
-            self.state.add("notice", HELP)
+            self.hermes_command("/help")
         elif text == "/clear":
             self.state.clear()
             self.state.add("notice", "Transcript cleared. Hermes still remembers this session.")
@@ -618,13 +658,68 @@ class App:
             self.state.add("notice", self.state.cost())
         elif text == "/doctor":
             self.doctor()
-        elif text == "/retry":
-            if self.state.can_retry:
-                self.retry()
-            else:
-                self.state.add("notice", "Nothing to retry.")
         else:
-            self.state.add("notice", f"{text} is not a command. Try {', '.join(COMMANDS[:6])} or /help.")
+            self.hermes_command(text)
+
+    def hermes_command(self, text: str) -> None:
+        """Hand a slash command to Hermes, the way its own terminal does: `slash.exec` first, which
+        answers with output; it refers skills, bundles and commands that need the live session to
+        `command.dispatch` (see command_result). Hermes refuses what may not run mid-turn itself."""
+        if not self.backend or not self.state.session_id:
+            self.state.add("notice", f"{text.split(' ')[0]} needs Hermes, which is still starting.")
+            return
+        future = self.request("slash.exec", self.scoped(command=text[1:]))
+        self.asked[future] = text
+
+    def dispatch(self, text: str) -> None:
+        name, _, arg = text[1:].partition(" ")
+        future = self.request("command.dispatch", self.scoped(name=name.lower(), arg=arg.strip()))
+        self.asked[future] = text
+
+    def command_result(self, text: str, result: dict) -> None:
+        """What Hermes made of a slash command: output to show, a message to send, a draft to put
+        back in the composer, or another command it stands for."""
+        name, _, arg = text.partition(" ")
+        kind = result.get("type")
+        if kind == "alias" and result.get("target"):
+            self.run_command(f"/{result['target']}" + (f" {arg}" if arg else ""))
+        elif kind in ("skill", "send"):
+            if result.get("notice"):
+                self.state.add("notice", str(result["notice"]))
+            message = str(result.get("message") or "").strip()
+            if message:
+                self.send_command(message, str(result.get("display") or "").strip() or text)
+        elif kind == "prefill":
+            if result.get("notice"):
+                self.state.add("notice", str(result["notice"]))
+            message = str(result.get("message") or "")
+            self.draft = Draft(message, len(message))
+            self.state.touch()
+        else:
+            output = str(result.get("output") or "").strip("\n") or f"{name}: no output"
+            if result.get("warning"):
+                output = f"warning: {result['warning']}\n{output}"
+            if name == "/help":
+                output += "\n\n" + HELP
+            self.show_output(name, output)
+
+    def show_output(self, name: str, output: str) -> None:
+        """A short answer is a note; a long one folds into a row of its own, a few lines showing."""
+        lines = [line for line in output.splitlines() if line.strip()]
+        if len(output) <= NOTE_CHARS and len(lines) <= NOTE_LINES:
+            self.state.add("notice", output)
+        else:
+            self.state.add("command", output, name=name)
+
+    def send_command(self, message: str, shown: str) -> None:
+        """Send what a command expanded to, showing the command as it was typed rather than the
+        expansion, which is written for the model."""
+        if self.state.busy:
+            self.state.add("notice", f"{shown.split(' ')[0]} can run when this turn ends.")
+            return
+        self.state.begin(shown)
+        self.state.last_prompt = message
+        self.request("prompt.submit", self.scoped(text=message))
 
     def doctor(self) -> None:
         """What `--doctor` prints on the terminal, said here so it is never a dead end."""
@@ -689,14 +784,12 @@ class App:
                     draft.replace(0, len(draft.text), "")
                 else:
                     self.exit = True
-            elif self.palette_key(item):
+            elif self.slash_key(item):
                 pass
             elif self.sheet_key(item):
                 pass
             elif self.watch_key(item):
                 pass
-            elif item.text == "/" and not draft.text:
-                self.state.open_palette()
             elif self.choose_by_key(item):
                 pass
             elif item.name == "escape":
@@ -718,7 +811,9 @@ class App:
             draft.undo()
             self.state.touch()
         elif isinstance(item, SendEvent) and item.id == "dock.composer":
-            self.submit(item.text or "")
+            # Tern's own send key on a command being typed runs the highlighted row, as Enter does.
+            if not self.slash_key(Key(name="enter")):
+                self.submit(item.text or "")
         elif isinstance(item, FocusEvent):
             self.surface.focus("dock.composer")
         elif isinstance(item, ErrorEvent):
@@ -727,3 +822,7 @@ class App:
             self.state.show(item.visible)
         elif isinstance(item, GoneEvent) and self.surface.id in item.ids:
             self.exit = True
+        if self.draft.text != self.typed:
+            self.typed = self.draft.text
+            self.state.slash.cursor = 0
+        self.ask_completions()

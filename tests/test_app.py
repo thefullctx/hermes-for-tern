@@ -178,25 +178,6 @@ def test_the_queue_never_outgrows_its_limit_and_drops_the_oldest():
     assert state.queued[0] == "note 3"
 
 
-def test_slash_commands_are_answered_here_and_never_reach_the_model():
-    instance = app()
-    instance.state.session_id = "live"
-    instance.state.ready = True
-    instance.run_command("/help")
-    instance.run_command("/cost")
-    instance.run_command("/nonsense")
-    assert not instance.backend.requests
-    assert "/help" in instance.state.rows[-3].text
-    assert "is not a command" in instance.state.rows[-1].text
-
-    instance.run_command("/clear")
-    assert len(instance.state.rows) == 1
-    assert "cleared" in instance.state.rows[0].text
-
-    instance.run_command("/quit")
-    assert instance.exit
-
-
 def test_clear_empties_the_transcript_but_keeps_the_live_session():
     state = Conversation()
     state.session_id = "live"
@@ -520,78 +501,150 @@ def test_a_held_follow_up_can_be_taken_back():
     assert instance.state.queued == ["second"]
 
 
-def test_a_lone_slash_opens_the_command_popup_and_typing_filters_it():
+def ready_app():
     instance = app()
+    instance.state.session_id = "live"
     instance.state.ready = True
-    instance.input(Key(name="/", text="/"))
-    assert instance.state.palette is not None
-    assert instance.draft.text == ""  # the slash goes to the popup, not the composer
-    for char in "mod":
+    return instance
+
+
+def answer(instance, method, result=None, error=None):
+    """Answer the newest request for `method` and let the app read it."""
+    future = next(f for m, _, f in reversed(instance.backend.requests) if m == method)
+    if error:
+        from hermes_for_tern.rpc import RpcError
+
+        future.set_exception(RpcError(error))
+    else:
+        future.set_result(result)
+    instance.check_requests()
+
+
+def type_text(instance, text):
+    for char in text:
         instance.input(Key(name=char, text=char))
+
+
+HERMES_ITEMS = {
+    "items": [
+        {"text": "model", "display": "/model", "meta": "Switch model (usage: /model [m])", "kind": "command"},
+        {"text": "moa", "display": "/moa", "meta": "Mixture of agents", "kind": "command"},
+        {"text": "compress", "display": "/compress", "meta": "Compress context", "kind": "command"},
+        {"text": "new", "display": "/new", "meta": "Start a new session", "kind": "command"},
+        {"text": "work", "display": "/work", "meta": "A skill", "kind": "skill"},
+    ],
+    "replace_from": 1,
+}
+
+
+def test_typing_a_slash_shows_the_list_and_each_letter_narrows_it():
+    from hermes_for_tern.views import slash_rows
+
+    instance = ready_app()
+    type_text(instance, "/")
+    assert instance.draft.text == "/"  # the slash stays in the composer
+    # this pane's commands show at once, before Hermes answers
+    assert [row["name"] for row in slash_rows(instance.state, "/")][:3] == ["/model", "/btw", "/bg"]
+    assert instance.backend.requests[-1][:2] == ("complete.slash", {"session_id": "live", "text": "/"})
+    answer(instance, "complete.slash", HERMES_ITEMS)
+    names = [row["name"] for row in slash_rows(instance.state, "/")]
+    # Hermes's own commands and skills follow; its /model is this pane's, and /new is hidden
+    assert names[-3:] == ["/moa", "/compress", "/work"] and names.count("/model") == 1 and "/new" not in names
+    type_text(instance, "mo")
+    # until Hermes answers "/mo", its last answer is narrowed to what is typed
+    assert [row["name"] for row in slash_rows(instance.state, "/mo")] == ["/model", "/moa"]
+    assert instance.backend.requests[-1][1]["text"] == "/mo"
+
+
+def test_the_arrows_move_tab_completes_and_enter_runs_through_hermes():
+    instance = ready_app()
+    type_text(instance, "/")
+    answer(instance, "complete.slash", HERMES_ITEMS)
+    type_text(instance, "com")
+    answer(instance, "complete.slash", {"items": HERMES_ITEMS["items"][2:3], "replace_from": 1})
+    instance.input(Key(name="tab"))
+    assert instance.draft.text == "/compress "
+    instance.draft = Draft("/com", 4)
     instance.input(Key(name="enter"))
-    assert instance.draft.text == "/model "
-    assert instance.state.palette is None
-    # a slash in the middle of a draft is just a slash
-    instance.draft = Draft("what is / about", 8)
-    instance.input(Key(name="/", text="/"))
-    assert instance.state.palette is None
-    assert instance.draft.text == "what is // about"
+    # not one of this pane's commands: Hermes runs it
+    assert instance.backend.requests[-1][:2] == ("slash.exec", {"session_id": "live", "command": "compress"})
+    answer(instance, "slash.exec", {"output": "Compressed 12 turns."})
+    assert instance.state.rows[-1].kind == "notice" and instance.state.rows[-1].text == "Compressed 12 turns."
 
 
-def test_the_popup_offers_every_local_command_and_filters_by_what_it_does():
-    instance = app()
-    instance.state.ready = True
-    from hermes_for_tern.views import command_rows
+def test_escape_puts_the_list_away_until_the_draft_changes():
+    from hermes_for_tern.views import slash_open
 
-    assert [row["id"] for row in command_rows()] == [
-        "/model",
-        "/btw",
-        "/bg",
-        "/name",
-        "/cost",
-        "/doctor",
-        "/retry",
-        "/clear",
-        "/stop",
-        "/help",
-        "/quit",
-    ]
-    # `/exit` is an alias of `/quit`: it works, and the popup offers one spelling per command
-    assert [row["id"] for row in command_rows("spent")] == ["/cost"]
-    assert [row["id"] for row in command_rows("zz")] == []
-    instance.input(Key(name="/", text="/"))
+    instance = ready_app()
+    type_text(instance, "/mo")
+    assert slash_open(instance.state, instance.draft)
     instance.input(Key(name="escape"))
-    assert instance.state.palette is None
+    assert not slash_open(instance.state, instance.draft)
+    assert instance.draft.text == "/mo"
+    type_text(instance, "d")
+    assert slash_open(instance.state, instance.draft)
 
 
-def test_the_popup_moves_with_the_arrows_and_backspace_puts_it_away():
-    from hermes_for_tern.views import command_rows
-
-    instance = app()
-    instance.state.ready = True
-    instance.input(Key(name="/", text="/"))
-    instance.input(Key(name="down"))
+def test_this_panes_commands_run_here_and_ones_needing_an_argument_wait_for_it():
+    instance = ready_app()
+    type_text(instance, "/bt")
     instance.input(Key(name="enter"))
-    assert instance.draft.text == "/btw "
-    assert instance.state.palette is None  # inserting puts the popup away
+    assert instance.draft.text == "/btw "  # /btw needs its question: Enter completes, nothing runs
+    assert not any(method == "prompt.btw" for method, _, _ in instance.backend.requests)
+    instance.run_command("/cost")
+    instance.run_command("/clear")
+    instance.run_command("/title Flaky test hunt")  # Hermes's spelling of /name
+    assert instance.backend.requests[-1][:2] == (
+        "session.title",
+        {"session_id": "live", "title": "Flaky test hunt"},
+    )
+    instance.run_command("/exit")
+    assert instance.exit
 
-    # a fresh popup, filtered, then filtered back to nothing: it closes itself
-    instance.draft = Draft("", 0)
-    instance.input(Key(name="/", text="/"))
-    instance.input(Key(name="b", text="b"))
-    assert instance.state.palette.query == "b"
-    instance.input(Key(name="backspace"))
-    assert instance.state.palette.query == ""  # an empty query shows the whole list again
-    assert [row["id"] for row in command_rows("")] == [
-        "/model",
-        "/btw",
-        "/bg",
-        "/name",
-        "/cost",
-        "/doctor",
-        "/retry",
-        "/clear",
-        "/stop",
-        "/help",
-        "/quit",
-    ]
+
+def test_long_output_folds_into_a_row_and_help_adds_this_panes_commands():
+    instance = ready_app()
+    instance.run_command("/help")
+    answer(
+        instance, "slash.exec", {"output": "Available Commands\n" + "\n".join(f"/c{i}" for i in range(20))}
+    )
+    row = instance.state.rows[-1]
+    assert row.kind == "command" and row.name == "/help" and row.collapsed
+    assert "In this pane: /model" in row.text
+
+
+def test_skills_go_through_command_dispatch_and_send_what_they_expand_to():
+    instance = ready_app()
+    instance.run_command("/work fix the leak")
+    answer(instance, "slash.exec", error={"code": 4018, "message": "skill command"})
+    assert instance.backend.requests[-1][:2] == (
+        "command.dispatch",
+        {"session_id": "live", "name": "work", "arg": "fix the leak"},
+    )
+    answer(
+        instance,
+        "command.dispatch",
+        {"type": "skill", "name": "work", "message": "SKILL BODY", "display": "/work fix the leak"},
+    )
+    assert instance.backend.requests[-1][:2] == (
+        "prompt.submit",
+        {"session_id": "live", "text": "SKILL BODY"},
+    )
+    # the transcript shows the command as typed, not the expansion written for the model
+    assert instance.state.rows[-1].kind == "user" and instance.state.rows[-1].text == "/work fix the leak"
+
+
+def test_hermes_refusals_and_prefills_are_shown_as_hermes_says_them():
+    instance = ready_app()
+    instance.run_command("/undo")
+    answer(instance, "slash.exec", error={"code": 4018, "message": "pending input"})
+    answer(
+        instance,
+        "command.dispatch",
+        {"type": "prefill", "message": "my last message", "notice": "Undid one turn."},
+    )
+    assert instance.draft.text == "my last message"
+    assert instance.state.rows[-1].text == "Undid one turn."
+    instance.run_command("/compress")
+    answer(instance, "slash.exec", error={"code": 4009, "message": "Hermes is busy; try when the turn ends."})
+    assert instance.state.rows[-1].text == "/compress: Hermes is busy; try when the turn ends."

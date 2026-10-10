@@ -3,7 +3,7 @@
    to right-aligned facts, tree rules under results, color as the only hierarchy, all on a
    1040px measure. Gold is Hermes. Program sheets reach only this surface's regions. */
 [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
-[data-role='activity'], [data-role='fuel'], [data-role='dispatches'] {
+[data-role='activity'], [data-role='fuel'], [data-role='dispatches'], [data-role='slash-list'] {
   --hft-gold: light-dark(#805c20, #d5b475);
   --hft-gold-wash: light-dark(#805c2012, #d5b47512);
   --hft-gold-line: light-dark(#805c2040, #d5b47540);
@@ -429,6 +429,26 @@
 [data-role='activity'] .sf-elapsed { font: inherit; color: var(--hft-faint); }
 .sf.sf-shimmer { --sh-lo: var(--hft-muted); --sh-mid: var(--hft-gold); --sh-hi: light-dark(#4b330e, #fff0c8); }
 
+/* the command list: right above the composer while a /command is typed, one line per command with
+   what it does, the highlighted one in gold; it grows and shrinks with every keystroke */
+.sf.sf-col[data-role='slash-list'] {
+  box-sizing: border-box; margin: 0 max(8px, (100% - 1040px) / 2 + 8px) 6px; padding: 4px;
+  border-radius: 6px; background: light-dark(#fffdf8f2, #1f1e1bf2);
+  box-shadow: inset 0 0 0 1px var(--hft-line); font-family: var(--hft-mono); }
+.sf.sf-row[data-role^='slash-'] {
+  height: var(--hft-lh); padding: 0 8px; gap: calc(2 * var(--hft-cw)); align-items: center;
+  border-radius: 4px; cursor: pointer; }
+.sf.sf-row[data-role='slash-current'] { background: var(--hft-gold-wash); }
+[data-role^='slash-'] .sf-text { font: inherit; line-height: var(--hft-lh); white-space: nowrap; }
+.sf.sf-text[data-role='slash-name'] { flex: none; min-width: calc(16 * var(--hft-cw)); color: var(--hft-ink); }
+[data-role='slash-current'] .sf-text[data-role='slash-name'] { color: var(--hft-gold); }
+.sf.sf-text[data-role='slash-kind'] { flex: none; font-size: 11px; color: var(--hft-gold); opacity: 0.7; }
+.sf.sf-text[data-role='slash-detail'] {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--hft-muted); }
+.sf.sf-text[data-role='slash-more'] {
+  padding: 0 8px; font-size: 11px; line-height: var(--hft-lh); color: var(--hft-faint); }
+.sf.sf-text[data-role='command-output'] { white-space: pre; font-family: var(--hft-mono); color: var(--hft-muted); }
+
 .sf.sf-editor[data-role='composer'] {
   box-sizing: border-box; min-height: 40px;
   margin: 0 max(8px, (100% - 1040px) / 2 + 8px) 10px;
@@ -468,7 +488,7 @@
 
 @media (prefers-contrast: more) {
   [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
-  [data-role='activity'] { --hft-ink: var(--t1); --hft-muted: var(--t2); --hft-faint: var(--t3); --hft-line: var(--l3); }
+  [data-role='activity'], [data-role='slash-list'] { --hft-ink: var(--t1); --hft-muted: var(--t2); --hft-faint: var(--t3); --hft-line: var(--l3); }
 }
 @media (max-width: 600px) {
   .sf.sf-col[data-role='canvas'] { padding: 12px 10px 16px calc(10px + var(--hft-gut)); }
@@ -480,7 +500,9 @@
   position: absolute; top: 0; right: 0; bottom: 110px; left: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
   padding: 16px 28px; overflow: auto; pointer-events: none; font-family: var(--hft-mono); color: var(--hft-ink);
+  transition: opacity 0.2s ease;
 }
+.sf.sf-el.hft-welcome-stage.hft-tucked { opacity: 0; }
 [data-role='welcome'] {
   flex-shrink: 0; margin: auto 0; padding: 24px 4px; width: 100%; max-width: 660px;
   text-align: center; pointer-events: auto; }

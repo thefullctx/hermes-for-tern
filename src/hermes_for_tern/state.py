@@ -244,12 +244,15 @@ class Sheet:
 
 
 @dataclass
-class Palette:
-    """The composer's command popup: what has been typed to filter it, and the row the cursor is
-    on. It opens on a lone `/` and closes when nothing is left to filter."""
+class Slash:
+    """The composer's live command list. It shows while the draft is a `/command` being typed; Hermes's
+    completions (`complete.slash`) arrive a moment after each keystroke and answer `answered`."""
 
-    query: str = ""
-    chosen: str = ""
+    answered: str = ""  # the draft Hermes's `items` complete
+    items: list[dict] = field(default_factory=list)
+    replace_from: int = 1  # where an argument completion replaces the draft from
+    cursor: int = 0  # the highlighted row
+    put_away: str | None = None  # Escape hides the list for this draft, until it changes
 
 
 @dataclass
@@ -306,8 +309,8 @@ class Conversation:
         self.sheet: Sheet | None = None
         # The watched delegated child (`subagent.tail`), when one is open.
         self.watch: Watch | None = None
-        # The composer's command popup, while a `/` is being typed.
-        self.palette: Palette | None = None
+        # The composer's live command list, while a `/command` is being typed.
+        self.slash = Slash()
 
     def touch(self) -> None:
         self.revision += 1
@@ -747,26 +750,16 @@ class Conversation:
         """A pending one-string ask (a password, a key, a code), when Hermes is waiting for one."""
         return next((q for q in self.questions.values() if q.method in SECRET_METHODS), None)
 
-    def open_palette(self) -> None:
-        if self.palette is None:
-            self.palette = Palette()
+    def completions(self, text: str, result: dict) -> None:
+        """Hermes's completions for the draft `text`."""
+        items = result.get("items")
+        self.slash.answered = text
+        self.slash.items = (
+            [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        )
+        replace_from = result.get("replace_from")
+        self.slash.replace_from = replace_from if isinstance(replace_from, int) else 1
         self.touch()
-
-    def close_palette(self) -> None:
-        if self.palette is not None:
-            self.palette = None
-            self.touch()
-
-    def filter_palette(self, text: str) -> None:
-        if self.palette:
-            self.palette.query = text
-            self.palette.chosen = ""
-            self.touch()
-
-    def choose_command(self, value: str) -> None:
-        if self.palette:
-            self.palette.chosen = value
-            self.touch()
 
     def open_watch(self, subagent_id: str) -> None:
         if self.watch is None or self.watch.id != subagent_id:
