@@ -483,3 +483,38 @@ def built_nodes(instance):
     from tern_sdk.reconcile import View
 
     return View.build(tree).nodes().values()
+
+
+def test_the_session_can_be_named_and_hermes_names_it_back():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.rename_session("Hunting a flaky test")
+    method, params, _ = instance.backend.requests[-1]
+    assert method == "session.title" and params["title"] == "Hunting a flaky test"
+    settled(instance, {"title": "Hunting a flaky test", "session_key": "stored"})
+    assert instance.state.title == "Hunting a flaky test"
+    # and the auto-titler's own rename arrives as an event
+    instance.backend.events.put(
+        {
+            "method": "event",
+            "params": {
+                "session_id": "live",
+                "type": "session.title",
+                "payload": {"session_id": "stored", "title": "Tern surface polish"},
+            },
+        }
+    )
+    instance.read_backend()
+    assert instance.state.title == "Tern surface polish"
+
+
+def test_a_held_follow_up_can_be_taken_back():
+    instance = app()
+    instance.state.ready = True
+    instance.state.begin("work")
+    instance.state.queue("first")
+    instance.state.queue("second")
+    instance.state.unqueue(0)
+    assert instance.state.queued == ["second"]
+    instance.state.unqueue(5)
+    assert instance.state.queued == ["second"]

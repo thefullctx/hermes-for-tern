@@ -21,6 +21,9 @@ MARKUP = set("*_`[]()#<>|~\\\n")
 LONG_TURN = 60
 # Tool output past this is clipped for the pane; the row says so rather than lying by omission.
 CLIP = 48000
+# Tern diffs the whole view every frame, so a session that runs for hours is capped: the newest
+# turns are drawn and the rest are counted in one line, never silently dropped.
+MAX_TURNS = 60
 
 
 def button(
@@ -791,16 +794,22 @@ def view(
     model: Callable | None = None,
     secret: Draft | None = None,
     watch: Callable | None = None,
+    unqueue: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
     # Each turn is its own column, so a gold thread can run down its gutter.
-    turns: list[tuple[str, list]] = []
+    turns: list[tuple[str, list[Row]]] = []
     for row in state.rows:
         if row.visible or row.kind in ("tool", "errands"):
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
-            turns[-1][1].append(transcript_row(row, state, retry, assets, watch))
+            turns[-1][1].append(row)
+    hidden = 0
+    if len(turns) > MAX_TURNS:
+        hidden = len(turns) - MAX_TURNS
+        turns = turns[hidden:]
+    turns = [(key, [transcript_row(row, state, retry, assets, watch) for row in rows]) for key, rows in turns]
     welcome = not turns
     rows: list = []
     if welcome:
@@ -821,6 +830,9 @@ def view(
                 ui.html.div(
                     ui.html.span(ui.html.span("PROJECT", class_="hft-context-label"), cwd.name),
                     ui.html.span(ui.html.span("MODEL", class_="hft-context-label"), model),
+                    ui.html.span(
+                        ui.html.span("SESSION", class_="hft-context-label"), state.title or "unnamed"
+                    ),
                     class_="hft-context",
                     key="context",
                 ),
@@ -933,6 +945,7 @@ def view(
                     key="queued",
                 ),
                 ui.text(f"{index + 1}/{len(state.queued)}", tone="muted", role="depth", key="depth"),
+                button("✕", lambda i=index: unqueue(i), key="drop"),
                 role="queued-line",
                 key=f"queued-{index}",
             ),
@@ -940,9 +953,16 @@ def view(
     usage = state.usage.get("total") or 0
     dock.append(
         ui.status(
-            ui.seg("hermes", role="brand", key="brand"),
+            ui.seg("hermes", role="brand", key="brand", priority=3),
             ui.seg("SIMULATED DEMO", role="demo", key="demo") if state.info.get("demo") else None,
-            ui.seg(model, icon="brain", key="model", on_click=(lambda _: model("open")) if model else None),
+            ui.seg(state.title, key="title", priority=2) if state.title else None,
+            ui.seg(
+                model,
+                icon="brain",
+                key="model",
+                priority=6,
+                on_click=(lambda _: model("open")) if model else None,
+            ),
             # The ring fills as thinking gets deeper; press it to step on.
             ui.effort(
                 state.effort,
@@ -951,14 +971,15 @@ def view(
                 on_click=(lambda _: effort()) if effort else None,
                 title=f"thinking effort: {state.effort}",
             ),
-            ui.seg(cwd.name, icon="folder", key="project"),
-            ui.seg(f"{usage:,} tokens", side="right", key="usage")
+            ui.seg(cwd.name, icon="folder", key="project", priority=5),
+            ui.seg(f"{usage:,} tokens", side="right", key="usage", priority=2)
             if isinstance(usage, int) and usage
             else None,
-            ui.seg(f"{fuel:.0f}% context", side="right", role="fuel-seg", key="fuel")
+            ui.seg(f"{fuel:.0f}% context", side="right", role="fuel-seg", key="fuel", priority=3)
             if fuel is not None
             else None,
-            ui.seg("⇧⏎ newline", side="right", key="newline"),
+            ui.seg("⇧⏎ newline", side="right", key="newline", priority=1),
+            # the send or stop key is the one thing the strip may never give up
             action,
             role="bar",
             key="bar",
@@ -969,6 +990,13 @@ def view(
         if welcome
         else ui.col(
             ui.col(
+                ui.text(
+                    f"… {hidden} earlier turns · /clear empties the transcript",
+                    role="earlier",
+                    key="earlier",
+                )
+                if hidden
+                else None,
                 *(
                     ui.col(
                         *nodes,
@@ -980,7 +1008,7 @@ def view(
                 ),
                 role="canvas",
                 key="canvas",
-            )
+            ),
         ),
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,

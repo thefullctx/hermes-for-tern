@@ -261,6 +261,7 @@ class Conversation:
         self.questions: dict[str, Question] = {}
         self.session_id: str | None = None
         self.stored_session_id: str | None = None
+        self.title: str = ""  # what Hermes named this session, when it has
         self.info: dict = {}
         self.busy = False
         self.ready = False
@@ -330,6 +331,12 @@ class Conversation:
 
     def take_queued(self) -> str | None:
         return self.queued.pop(0) if self.queued else None
+
+    def unqueue(self, index: int) -> None:
+        """Drop one held follow-up: a thought can be taken back before the turn ends."""
+        if 0 <= index < len(self.queued):
+            del self.queued[index]
+            self.touch()
 
     def clear(self) -> None:
         """Empty the transcript in place; the session and the backend's own history carry on."""
@@ -599,6 +606,8 @@ class Conversation:
             self.busy = False
             self.activity = "Ready"
             self._assistant = None
+        elif kind == "session.title":
+            self.title = str(payload.get("title") or "")
         elif kind == "session.usage":
             self.usage = payload.get("usage") or {}
         elif kind == "status.update":

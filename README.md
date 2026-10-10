@@ -185,6 +185,11 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   never logged and never kept once sent.
 - `/btw <question>` asks Hermes beside the work it is doing, over a snapshot of the conversation; the
   answer arrives as a dispatch. `/bg <task>` hands it a task on a fresh agent, answered when done.
+- The session's name: `/name <title>` names it through Hermes (which owns titles and echoes them
+  back, including when its auto-titler renames it). It sits on the startup screen's context line and,
+  quietly, on the status strip.
+- Follow-ups held while Hermes works can be taken back: each `queued · …` row carries its own `✕`,
+  so a thought typed by mistake never has to be sent.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
   the ring, with the new level floating above the composer under a lamp. The ring sends
   `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
@@ -221,8 +226,8 @@ The composer stays editable while Hermes works: `Enter` holds your message and s
 the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
 is still empty, so typing a number into a free-text answer types a number.
 
-`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit`, `/model`, `/btw` and `/bg`
-are local commands, answered in the pane. A slash command Hermes does not implement is refused with a
+`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit`, `/model`, `/btw`, `/bg`
+and `/name` are local commands, answered in the pane. A slash command Hermes does not implement is refused with a
 pointer to `/help` rather than sent to the model.
 
 ## Restore the original command
@@ -263,7 +268,9 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 ## MVP boundaries
 
 One live conversation per process. Session browsing/resume, restart recovery, attachments,
-voice and desktop browser bridges are not implemented. Slash commands are limited to
+voice and desktop browser bridges are not implemented. A session that runs for hundreds of turns
+draws its newest 60 and says how many are left out (`… N earlier turns`), so a pane stays responsive
+however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Slash commands are limited to
 the local set above; anything meant for the model is refused rather than forwarded.
 Subagents show their goal, status, current tool and totals, nested by parent; click one to watch its
 live transcript, steer it a line or interrupt it. The visual demo shows
@@ -273,6 +280,9 @@ Hermes's one-string asks (`sudo`, `secret`, `vault.unlock_prompt`, `vault.code`)
 composer, masked; the answer is sent and kept nowhere. Other server requests — `tour`, `preview.act`,
 `preview.read`, `terminal.read`, `window.read`, `vault.save_login` and the desktop bridges — receive an
 explicit unsupported-method error so they cannot leave the agent waiting indefinitely.
+
+The status strip gives up its least useful segments first when a pane is narrow: the newline hint
+goes before the token count, the counts before the model name, and never the send or stop key.
 
 Tern's inline surface disappears when you return to the shell prompt. Hermes owns durable conversation
 storage; the Tern transcript is not a persistence layer. Multiplexers such as tmux disable SDK detection.
@@ -301,12 +311,13 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 91 tests covering streaming/interim/final message ordering, paced
+The current suite contains 97 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
 approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
-the watched subagent and its steer, process disconnection, reversible launcher installation and demo
+the watched subagent and its steer, the render window, the session title and the
+follow-up queue, process disconnection, reversible launcher installation and demo
 completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 

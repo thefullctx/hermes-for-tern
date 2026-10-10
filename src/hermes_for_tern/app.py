@@ -32,8 +32,9 @@ COMMANDS = (
     "/model",
     "/btw",
     "/bg",
+    "/name",
 )
-HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model · /btw · /bg"
+HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model · /btw · /bg · /name"
 
 
 class App:
@@ -131,6 +132,7 @@ class App:
                 self.model_event,
                 self.secret,
                 self.watch_event,
+                self.state.unqueue,
             )
         )
         if self.backend:
@@ -229,6 +231,10 @@ class App:
                     self.state.touch()
                 elif method == "config.set":
                     self.model_set(result)
+                elif method == "session.title":
+                    if result.get("title"):
+                        self.state.title = str(result["title"])
+                        self.state.touch()
                 elif method == "subagent.tail":
                     self.state.watch_tail(result)
                 elif method in ("subagent.interrupt", "subagent.steer"):
@@ -406,6 +412,11 @@ class App:
             params["confirm_expensive_model"] = True
         self.request("config.set", self.scoped(**params))
 
+    def rename_session(self, title: str) -> None:
+        """Name this session; Hermes owns the title and echoes it back on `session.title`."""
+        if title and self.state.session_id:
+            self.request("session.title", self.scoped(title=title))
+
     def side_question(self, text: str) -> None:
         """Ask Hermes something beside the work it is doing; the answer lands as a dispatch."""
         if not text or not self.state.session_id:
@@ -544,6 +555,10 @@ class App:
             self.model_event("open")
         elif text.startswith("/model "):
             self.switch_model(text[len("/model ") :].strip())
+        elif text == "/name":
+            self.state.add("notice", "Name the session with /name <title>.")
+        elif text.startswith("/name "):
+            self.rename_session(text[len("/name ") :].strip())
         elif text.startswith("/btw "):
             self.side_question(text[len("/btw ") :].strip())
         elif text.startswith("/bg "):

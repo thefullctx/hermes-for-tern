@@ -587,3 +587,56 @@ def test_a_subagent_row_opens_its_watch():
     # and the row carries no watch of its own to open
     state.open_watch("a1")
     assert state.watch is not None and state.watch.id == "a1"
+
+
+def test_a_long_session_is_capped_but_never_silently():
+    from hermes_for_tern.views import MAX_TURNS
+
+    state = Conversation()
+    state.ready = True
+    for turn in range(MAX_TURNS + 12):
+        state.begin(f"prompt {turn}")
+        state.event("message.complete", {"text": "A short reply.", "status": "complete"})
+    assert len(state.rows) == (MAX_TURNS + 12) * 3  # user, assistant, delivered
+    built = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop))
+    assert "main.canvas.earlier" in built.nodes()
+    assert built.nodes()["main.canvas.earlier"].wire()["p"]["text"].startswith("… 12 earlier turns")
+    assert built.nodes()["main.canvas.earlier"].wire()["p"]["role"] == "earlier"
+    # the newest turn is always the one drawn, whatever was capped
+    assert f"main.canvas.r{(MAX_TURNS + 12) * 3 - 2}" in built.nodes()
+    drawn = [n for n in built.nodes() if n.startswith("main.canvas.r") and n.count(".") == 2]
+    assert len(drawn) < (MAX_TURNS + 12) * 3, len(drawn)
+
+
+def test_a_held_follow_up_carries_its_own_drop_key():
+    state = Conversation()
+    state.ready = True
+    state.begin("work")
+    state.queue("and then this")
+    dropped = []
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, unqueue=dropped.append)
+    )
+    assert "dock.queued-0.drop" in built.nodes()
+    assert not dropped
+
+
+def test_the_session_title_sits_on_the_welcome_screen_and_the_strip():
+    state = Conversation()
+    state.ready = True
+    state.title = "Hunting a flaky test"
+    built = build(state)
+    assert built.nodes()["layer.stage.welcome.context.2.1"].wire()["p"]["text"] == "Hunting a flaky test"
+    assert built.nodes()["dock.bar.title"].wire()["p"]["text"] == "Hunting a flaky test"
+    assert built.nodes()["dock.bar.title"].wire()["p"]["priority"] == 2
+
+
+def test_the_strip_says_which_segments_may_be_given_up():
+    state = Conversation()
+    state.ready = True
+    built = build(state)
+    segs = {key: node.wire()["p"] for key, node in built.nodes().items() if ".bar." in key}
+    assert segs["dock.bar.action"].get("priority") is None  # the send or stop key may never be given up
+    assert segs["dock.bar.newline"]["priority"] == 1  # the hint goes first
+    assert segs["dock.bar.model"]["priority"] == 6
+    assert segs["dock.bar.project"]["priority"] == 5
