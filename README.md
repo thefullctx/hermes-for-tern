@@ -151,16 +151,21 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Search results (`search_files`) as a file tree with line numbers, each match underlined in gold ink
   that draws itself in.
 - Failed turns as `✗ Undelivered`, underlined in red ink, with the provider's code, and a `retry ⏎` key when Hermes marks the
-  failure retryable (Enter in an empty composer retries too).
+  failure retryable (Enter in an empty composer retries too). Hermes's error surface names the fix
+  first — sign in again, the environment variable to set, or when the limit lifts — so a failure it
+  did not mark retryable says so rather than offering a key that cannot work.
 - Dispatches: short notes above the composer for Hermes's notices, finished background tasks, and a
   reply that was delivered (or failed) while the pane was hidden, shown when you come back.
 - Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
   tokens, time and a one-line summary, with grandchildren nested under their parent.
 - Composer typing, multiline paste, Unicode, native selection and basic undo.
 - Tool approval cards using the backend's offered choices, answered with the mouse or the keyboard:
-  number keys pick a choice, `Enter` allows once, `Escape` denies.
+  number keys pick a choice, `Enter` allows once, `Escape` denies. An approval Hermes withdraws (an
+  interrupt, a session reap, a timeout) leaves the card saying it was denied, so it never waits for
+  an answer that can no longer be given.
 - Clarification questions: options, multiple selections, free text and skipping, with number keys
-  selecting an option while the answer box is still empty.
+  selecting an option while the answer box is still empty. Choices past the ninth stay clickable;
+  only the ones a key can reach are numbered.
 - Follow-ups composed while Hermes works are queued and sent when the turn ends, shown above the
   composer as `queued · …` so nothing typed is dropped.
 - Local commands: `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit`.
@@ -277,10 +282,11 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 49 tests covering streaming/interim/final message ordering, paced
+The current suite contains 73 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns and Hermes's signature and working pen, Unicode edits, server-request answers, process disconnection, reversible launcher installation
+turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
+approvals, unretryable failures and their error surface, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 

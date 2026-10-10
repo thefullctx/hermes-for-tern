@@ -17,7 +17,8 @@ FADE = (0.12, 0.32, 0.6)
 # A finished thought stays readable, then fades; after FOLD seconds it folds to one line.
 FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
-QUIET_TOOLS = {"todo"}
+# Hermes names that tool `todo_list`; `todo` is its legacy alias.
+QUIET_TOOLS = {"todo_list", "todo"}
 # Seconds of silence while thinking after which Hermes is musing and the pen writes its working mark.
 MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.
@@ -541,7 +542,9 @@ class Conversation:
                     str(error),
                     name="turn",
                     result=surface,
-                    retryable=bool(surface.get("retryable", True)) and bool(self.last_prompt),
+                    # Hermes's surface always says whether a failure is retryable; a surface that
+                    # says nothing earns no retry key rather than a promise Hermes never made.
+                    retryable=bool(surface.get("retryable", False)) and bool(self.last_prompt),
                 )
             for tool in self.tools.values():
                 if tool.status == "running":
@@ -605,6 +608,8 @@ class Conversation:
             )
         elif kind == "request.cancel":
             self.questions.pop(str(payload.get("id")), None)
+        elif kind == "approval.cancelled":
+            self.withdraw_approvals(payload)
         self.touch()
 
     def dispatch(
@@ -676,3 +681,20 @@ class Conversation:
 
     def approval(self) -> Question | None:
         return next((q for q in self.questions.values() if q.method == "approval"), None)
+
+    def withdraw_approvals(self, payload: dict) -> None:
+        """Hermes dropped pending approvals (interrupt, reap, teardown) and resolved them as deny;
+        without this a card left on screen answers a request that no longer exists. `request_ids`
+        carries Hermes's own ids — the same `request_id` the card showed — not this connection's
+        frame ids, and it omits entries with none, so a frame nothing matches withdraws nothing."""
+        ids = {str(value) for value in payload.get("request_ids") or []}
+        dropped = [
+            rid
+            for rid, question in self.questions.items()
+            if question.method == "approval" and str(question.params.get("request_id")) in ids
+        ]
+        for rid in dropped:
+            self.questions.pop(rid, None)
+        if dropped:
+            reason = str(payload.get("reason") or "Hermes withdrew it")
+            self.add("notice", f"Permission request withdrawn ({reason}); it was denied.")

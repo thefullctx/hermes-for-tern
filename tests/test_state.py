@@ -3,6 +3,7 @@ from hermes_for_tern.state import (
     FOLD,
     MUSING,
     Conversation,
+    Question,
     hermes_effort,
     ring_effort,
 )
@@ -236,6 +237,20 @@ def test_errands_do_not_split_a_streaming_reply():
     assert [row.text for row in state.rows if row.kind == "assistant"] == ["First half, second half."]
 
 
+def test_the_todo_tool_is_quiet_under_both_the_current_and_legacy_name():
+    # Hermes names the tool `todo_list`; its snapshot is the errands row, so the tool must not
+    # also print the whole list as JSON beside it.
+    snapshot = {"todos": [{"id": "0", "content": "t0", "status": "in_progress"}], "revision": 1}
+    for name in ("todo_list", "todo"):
+        state = Conversation()
+        state.begin("work")
+        state.event("tool.start", {"tool_id": "t", "name": name, "args": {}})
+        state.event("todo.updated", snapshot)
+        state.event("tool.complete", {"tool_id": "t", "name": name, "result": snapshot, "duration_s": 0.1})
+        assert [row.kind for row in state.rows] == ["user", "errands"], name
+        assert [i["status"] for i in state.rows[1].items] == ["in_progress"]
+
+
 def test_late_reasoning_is_placed_above_the_reply_it_belongs_to():
     state = Conversation()
     state.begin("why?")
@@ -264,6 +279,44 @@ def test_a_failed_turn_is_undelivered_once_and_can_be_retried():
     assert not state.can_retry
     state.event("message.complete", {"status": "error", "text": "No.", "error_surface": {"retryable": False}})
     assert not state.can_retry
+
+
+def test_a_failure_hermes_did_not_mark_retryable_earns_no_retry():
+    state = Conversation()
+    state.ready = True
+    state.begin("hello")
+    state.event("message.complete", {"status": "error", "text": "Boom.", "error_surface": {}})
+    assert state.rows[-1].retryable is False
+    assert not state.can_retry
+
+
+def test_a_withdrawn_approval_leaves_the_card_and_says_why():
+    state = Conversation()
+    state.session_id = "live"
+    state.questions["srq-1"] = Question(
+        "srq-1", "approval", {"session_id": "live", "request_id": "rq-1", "choices": ["once", "deny"]}
+    )
+    state.event(
+        "approval.cancelled",
+        {"session_id": "live", "reason": "interrupt", "cancelled_count": 1, "request_ids": ["rq-1"]},
+    )
+    assert not state.questions
+    assert state.rows[-1].kind == "notice" and "interrupt" in state.rows[-1].text
+
+
+def test_a_withdrawal_naming_other_requests_leaves_pending_cards_alone():
+    state = Conversation()
+    state.session_id = "live"
+    state.questions["srq-1"] = Question(
+        "srq-1", "approval", {"session_id": "live", "request_id": "rq-1", "choices": ["deny"]}
+    )
+    state.questions["srq-2"] = Question("srq-2", "clarify", {"questions": [{"qid": "a", "question": "?"}]})
+    state.event(
+        "approval.cancelled",
+        {"session_id": "live", "reason": "lru_evict", "request_ids": ["rq-9"]},
+    )
+    assert list(state.questions) == ["srq-1", "srq-2"]
+    assert not state.rows  # nothing was withdrawn, so nothing was said
 
 
 def test_dispatches_expire_and_turn_news_waits_until_the_pane_is_seen():
