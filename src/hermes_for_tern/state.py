@@ -228,6 +228,16 @@ class Question:
         return questions[self.index] if self.index < len(questions) else {}
 
 
+@dataclass
+class Sheet:
+    """The model sheet over the dock: what has been typed to filter it, and the row the cursor
+    sits on. `chosen` is the row's id — the value a switch sends."""
+
+    query: str = ""
+    chosen: str = ""
+    confirming: bool = False  # Hermes asked whether the expensive pick is worth it
+
+
 class Conversation:
     def __init__(self):
         self.rows: list[Row] = []
@@ -265,6 +275,9 @@ class Conversation:
         self.effort: str = "off"
         self.effort_notice: float | None = None
         self.effort_presses: int = 0
+        # The model sheet over the dock, and Hermes's catalog it draws from (`model.options`).
+        self.models: dict = {}
+        self.sheet: Sheet | None = None
 
     def touch(self) -> None:
         self.revision += 1
@@ -698,3 +711,27 @@ class Conversation:
         if dropped:
             reason = str(payload.get("reason") or "Hermes withdrew it")
             self.add("notice", f"Permission request withdrawn ({reason}); it was denied.")
+
+    def open_sheet(self) -> None:
+        if self.sheet is None:
+            self.sheet = Sheet()
+        self.touch()
+
+    def close_sheet(self) -> None:
+        if self.sheet is not None:
+            self.sheet = None
+            self.touch()
+
+    def filter_sheet(self, text: str) -> None:
+        """Typing filters the sheet; the cursor follows the top match again."""
+        if self.sheet:
+            self.sheet.query = text
+            self.sheet.chosen = ""
+            self.touch()
+
+    def choose_row(self, value: str) -> None:
+        """A row was picked or the cursor moved to it; the value is the row's id."""
+        if self.sheet:
+            self.sheet.chosen = value
+            self.sheet.confirming = False
+            self.touch()

@@ -15,13 +15,13 @@ from .editor import Draft
 from .rpc import Backend
 from .state import Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
-from .views import view
+from .views import sheet_cursor, sheet_rows, view
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
 # What the composer can be told to do, all handled here rather than sent to the model.
-COMMANDS = ("/help", "/clear", "/cost", "/retry", "/doctor", "/stop", "/quit", "/exit")
-HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit"
+COMMANDS = ("/help", "/clear", "/cost", "/retry", "/doctor", "/stop", "/quit", "/exit", "/model")
+HELP = "Commands: /help · /clear · /cost · /retry · /doctor · /stop · /quit · /model"
 
 
 class App:
@@ -112,6 +112,7 @@ class App:
                 self.assets,
                 self.retry,
                 self.cycle_effort,
+                self.model_event,
             )
         )
         if self.backend:
@@ -205,6 +206,11 @@ class App:
                 elif method == "session.interrupt":
                     self.state.activity = "Stopping" if self.state.busy else "Ready"
                     self.state.touch()
+                elif method == "model.options":
+                    self.state.models = result
+                    self.state.touch()
+                elif method == "config.set":
+                    self.model_set(result)
             except Exception as exc:
                 if method in ("client.capabilities", "session.create"):
                     self.fail(str(exc))
@@ -287,6 +293,90 @@ class App:
         if self.state.session_id:
             self.request("config.set", self.scoped(key="reasoning", value=hermes_effort(level)))
 
+    def model_event(self, action: str, value: str = "") -> None:
+        """The model sheet's own events: `open` from the model segment, `pick` from a row,
+        `confirm` from its switch key, `cancel` from its cancel key or the backdrop."""
+        if action == "open":
+            if self.state.session_id:
+                self.request("model.options", self.scoped(refresh=True))
+            self.state.open_sheet()
+        elif action == "pick":
+            if value:
+                self.state.choose_row(value)
+                self.switch_model(value)
+        elif action == "confirm":
+            self.confirm_model()
+        elif action == "cancel":
+            self.state.close_sheet()
+
+    def sheet_key(self, item) -> bool:
+        """The model sheet owns the keyboard while it is open: type to filter, arrows to move the
+        cursor, Enter to switch, Escape to put it away. True when the key was the sheet's."""
+        sheet = self.state.sheet
+        if sheet is None or item.ctrl or item.alt or item.meta:
+            return False
+        if item.name == "escape":
+            self.state.close_sheet()
+        elif item.name == "enter":
+            self.confirm_model()
+        elif item.name == "backspace":
+            self.state.filter_sheet(sheet.query[:-1])
+        elif item.name in ("up", "down"):
+            self.move_sheet(item.name == "down")
+        elif item.text:
+            self.state.filter_sheet(sheet.query + item.text)
+        else:
+            return False
+        return True
+
+    def move_sheet(self, down: bool) -> None:
+        rows = [row["id"] for row in sheet_rows(self.state)]
+        if not rows:
+            return
+        at = rows.index(self.state.sheet.chosen) if self.state.sheet.chosen in rows else -1
+        self.state.choose_row(rows[max(0, min(len(rows) - 1, at + (1 if down else -1)))])
+
+    def confirm_model(self) -> None:
+        """The switch key: the chosen row, or the session's own model when nothing was chosen."""
+        if not self.state.sheet:
+            return
+        if self.state.sheet.confirming:
+            self.switch_model(self.state.sheet.chosen, confirmed=True)
+            return
+        chosen = sheet_cursor(self.state)
+        if chosen:
+            self.switch_model(chosen)
+
+    def switch_model(self, value: str, *, confirmed: bool = False) -> None:
+        """Ask Hermes to run another model. Mid-turn it holds the pick for the next turn start and
+        reports it in session.info; an expensive model asks first, which is what `confirmed` is."""
+        if not value or not self.state.session_id:
+            return
+        if self.state.sheet:
+            # The sheet's row is the pending pick, so a confirmation repeats the same one.
+            self.state.choose_row(value)
+        params: dict = {"key": "model", "value": value}
+        if confirmed:
+            params["confirm_expensive_model"] = True
+        self.request("config.set", self.scoped(**params))
+
+    def model_set(self, result: dict) -> None:
+        """Hermes answered a model switch: either it asks whether the expensive pick is worth it,
+        or it holds the pick for the next turn because this one is still running."""
+        if result.get("confirm_required"):
+            if self.state.sheet:
+                self.state.sheet.confirming = True
+            self.state.add(
+                "notice",
+                str(result.get("confirm_message") or "Hermes asks whether this model is worth it."),
+            )
+            return
+        self.state.close_sheet()
+        if result.get("deferred"):
+            self.state.dispatch("model", "model switches when this turn ends", str(result.get("value") or ""))
+        if result.get("warning"):
+            self.state.add("notice", str(result["warning"]))
+
     def suggest(self, text: str) -> None:
         self.draft = Draft(text, len(text))
         self.state.touch()
@@ -331,6 +421,10 @@ class App:
         """One of COMMANDS, answered here; anything else starting with `/` is not one."""
         if text in ("/quit", "/exit"):
             self.exit = True
+        elif text == "/model":
+            self.model_event("open")
+        elif text.startswith("/model "):
+            self.switch_model(text[len("/model ") :].strip())
         elif text == "/stop":
             self.stop()
             self.draft = Draft()
@@ -410,6 +504,8 @@ class App:
                     draft.replace(0, len(draft.text), "")
                 else:
                     self.exit = True
+            elif self.sheet_key(item):
+                pass
             elif self.choose_by_key(item):
                 pass
             elif item.name == "escape":

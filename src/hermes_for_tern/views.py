@@ -495,6 +495,141 @@ def signature(assets: dict[str, str] | None, use: str, height: int, *, role: str
     )
 
 
+def model_rows(state: Conversation) -> list[dict]:
+    """Every model Hermes offers, as picker rows. A row's id is the value a switch sends: the bare
+    name when only one provider carries it (Hermes resolves the provider itself), otherwise
+    `provider/model`. Providers without credentials keep their rows, disabled with the reason."""
+    catalog = state.models or {}
+    offered = [
+        (
+            str(provider.get("slug") or ""),
+            str(provider.get("name") or provider.get("slug") or ""),
+            model,
+            provider,
+        )
+        for provider in catalog.get("providers") or []
+        if isinstance(provider, dict)
+        for model in provider.get("models") or []
+    ]
+    names = [model for _, _, model, _ in offered]
+    rows = []
+    for slug, provider_name, model, provider in offered:
+        row = {
+            "id": model if names.count(model) == 1 else f"{slug}/{model}",
+            "label": model,
+            "detail": provider_name,
+            "mono": True,
+        }
+        pricing = (provider.get("pricing") or {}).get(model) or {}
+        facts = {
+            key: str(value)
+            for key, value in (("in", pricing.get("input")), ("out", pricing.get("output")))
+            if value
+        }
+        if facts:
+            row["facts"] = facts
+        if provider.get("authenticated") is False:
+            row["disabled"] = f"set {provider.get('key_env') or 'a key'}"
+        rows.append(row)
+    return rows
+
+
+def sheet_rows(state: Conversation) -> list[dict]:
+    """The rows the sheet is showing: the catalog, filtered by what was typed."""
+    rows = model_rows(state)
+    query = (state.sheet.query if state.sheet else "").strip().lower()
+    if not query:
+        return rows
+    return [row for row in rows if query in f"{row['label']} {row['detail']}".lower()]
+
+
+def sheet_cursor(state: Conversation) -> str:
+    """The row the cursor sits on — what was chosen, else the session's own model while it is in
+    view, else the top row the sheet is showing. The sheet draws it and the switch key acts on it,
+    so both read this one answer."""
+    rows = sheet_rows(state)
+    if not rows:
+        return ""
+    ids = [row["id"] for row in rows]
+    here = (state.sheet.chosen if state.sheet else "") or current_model(state)
+    return here if here in ids else ids[0]
+
+
+def current_model(state: Conversation) -> str:
+    """The row of the model this session is running, when the catalog lists it."""
+    model = str(state.info.get("model") or "")
+    if not model:
+        return ""
+    provider = str(state.info.get("provider") or "")
+    wanted = {model, f"{provider}/{model}"}
+    rows = model_rows(state)
+    for row in rows:
+        if row["id"] in wanted:
+            return row["id"]
+    # A name only one provider carries is its own row; Hermes resolves a bare name itself.
+    named = [row for row in rows if row["label"] == model]
+    return named[0]["id"] if len(named) == 1 else ""
+
+
+def model_sheet(state: Conversation, events: Callable | None):
+    """The model sheet over the dock: Hermes's catalog, filtered as you type, with the switch and
+    cancel keys in its own bar. It owns the keyboard while it is open (see App.sheet_key)."""
+    sheet = state.sheet
+    if sheet is None:
+        return None
+    rows = sheet_rows(state)
+    chosen = sheet_cursor(state)
+    return ui.picker(
+        ui.col(
+            ui.text(
+                [
+                    ui.span("provider  ", "dim"),
+                    ui.span(next((row["detail"] for row in rows if row["id"] == chosen), "")),
+                ],
+                key="detail",
+            ),
+            ui.text(
+                [ui.span("session   ", "dim"), ui.span(str(state.info.get("model") or "unknown"))],
+                key="current",
+            ),
+            gap="sm",
+            key="preview",
+        ),
+        title="Model",
+        subtitle=f"{len(rows)} of {len(model_rows(state))} matches"
+        if sheet.query.strip()
+        else (f"{len(rows)} models" if rows else "asking Hermes…"),
+        items=rows,
+        order=[row["id"] for row in rows],
+        current=[chosen] if chosen else None,
+        selected=current_model(state) or None,
+        total=len(rows),
+        empty="no model matches" if state.models else "asking Hermes…",
+        placeholder="type to filter",
+        noun="model",
+        size="md",
+        preview="side",
+        state="ready",
+        actions=[
+            {"id": "pick", "label": "Switch model", "keys": ["enter"], "primary": True},
+            {"id": "close", "label": "Cancel", "keys": ["escape"], "end": True},
+        ],
+        confirm={
+            "text": "Hermes asks whether this model is worth it.",
+            "act": "pick",
+            "label": "Switch anyway",
+        }
+        if sheet.confirming
+        else None,
+        on_select=(lambda event: events("pick", event.item)) if events else None,
+        on_action={"pick": (lambda _: events("confirm")), "close": (lambda _: events("cancel"))}
+        if events
+        else None,
+        role="model-sheet",
+        key="sheet",
+    )
+
+
 def wordmark(assets: dict[str, str]):
     """HERMES, written in stroke by stroke over its own faint ghost; plain text without images."""
     if "wordmark" in assets:
@@ -560,6 +695,7 @@ def view(
     assets: dict[str, str] | None = None,
     retry: Callable | None = None,
     effort: Callable | None = None,
+    model: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
@@ -704,7 +840,7 @@ def view(
         ui.status(
             ui.seg("hermes", role="brand", key="brand"),
             ui.seg("SIMULATED DEMO", role="demo", key="demo") if state.info.get("demo") else None,
-            ui.seg(model, icon="brain", key="model"),
+            ui.seg(model, icon="brain", key="model", on_click=(lambda _: model("open")) if model else None),
             # The ring fills as thinking gets deeper; press it to step on.
             ui.effort(
                 state.effort,
@@ -746,6 +882,7 @@ def view(
         ),
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
+            model_sheet(state, model),
             dispatches(
                 state.dispatches,
                 (

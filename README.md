@@ -170,6 +170,12 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   composer as `queued · …` so nothing typed is dropped.
 - Local commands: `/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit`.
   `/doctor` reports the launcher, backend command, protocol version and session in the pane.
+- The model sheet: `/model` (or a click on the model name in the status strip) opens Hermes's whole
+  catalog as a native sheet over the composer — every model of every provider, with its price and
+  the credential a provider without one needs. Type to filter, arrows to move, `Enter` to switch,
+  `Escape` to put it away; clicking a row switches straight away. `/model <name>` switches without
+  the sheet. A model Hermes calls expensive asks first; a pick made mid-turn is held for the next
+  turn start and says so, and the status strip follows what Hermes reports back.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
   the ring, with the new level floating above the composer under a lamp. The ring sends
   `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
@@ -192,21 +198,22 @@ and it never automatically approves a request.
 
 | Key | Action |
 | --- | --- |
-| Enter | Send a prompt, answer a clarification, or allow once on a pending approval |
+| Enter | Send a prompt, answer a clarification, allow once on a pending approval, or switch model with the sheet open |
 | 1–9 | Pick the choice shown on an approval or clarification card |
 | Shift+Enter / Alt+Enter | Insert a newline |
 | Ctrl+C | Stop an active turn; clear a draft when idle; exit when idle with an empty draft |
-| Escape | Stop the active turn; deny a pending approval |
+| Escape | Stop the active turn; deny a pending approval; put the model sheet away |
 | Ctrl+D with an empty draft | Exit |
+| With the model sheet open | Type to filter, ↑/↓ to move the cursor, Enter to switch, Escape to close |
 | Native selection / undo shortcuts | Handled through Tern's edit and undo events |
 
 The composer stays editable while Hermes works: `Enter` holds your message and sends it the moment
 the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
 is still empty, so typing a number into a free-text answer types a number.
 
-`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit` and `/exit` are local commands,
-answered in the pane. A slash command Hermes does not implement is refused with a pointer to
-`/help` rather than sent to the model.
+`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit` and `/model` are local
+commands, answered in the pane. A slash command Hermes does not implement is refused with a pointer
+to `/help` rather than sent to the model.
 
 ## Restore the original command
 
@@ -282,11 +289,12 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 73 tests covering streaming/interim/final message ordering, paced
+The current suite contains 83 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
-approvals, unretryable failures and their error surface, process disconnection, reversible launcher installation
+approvals, unretryable failures and their error surface, the model sheet and its switch, process disconnection,
+reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 

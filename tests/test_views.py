@@ -365,3 +365,148 @@ def test_the_pressed_level_floats_with_a_lamp_then_goes_away_itself():
     state.pace(time.monotonic())
     assert state.effort_notice is None
     assert lamps(build(state)) == []
+
+
+CATALOG = {
+    "model": "claude-sonnet-4",
+    "provider": "anthropic",
+    "providers": [
+        {
+            "slug": "anthropic",
+            "name": "Anthropic",
+            "models": ["claude-sonnet-4", "claude-haiku-4"],
+            "authenticated": True,
+            "pricing": {"claude-sonnet-4": {"input": "$3", "output": "$15"}},
+        },
+        {
+            "slug": "openai",
+            "name": "OpenAI",
+            "models": ["gpt-5"],
+            "authenticated": False,
+            "key_env": "OPENAI_API_KEY",
+        },
+        {"slug": "copilot", "name": "GitHub Copilot", "models": ["claude-sonnet-4"], "authenticated": True},
+    ],
+}
+
+
+def sheet(state, events=None):
+    state.open_sheet()
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/project"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            None,
+            noop,
+            noop,
+            model=events,
+        )
+    )
+    return built
+
+
+def test_the_model_sheet_lists_every_model_with_its_provider_and_price():
+    state = Conversation()
+    state.ready = True
+    state.models = CATALOG
+    state.info = {"model": "claude-sonnet-4", "provider": "anthropic"}
+    built = sheet(state)
+    rows = [n.wire()["p"] for n in built.nodes().values() if n.wire()["k"] == "picker"]
+    assert len(rows) == 1
+    picker = rows[0]
+    assert picker["role"] == "model-sheet"
+    labels = {item["id"]: item for item in picker["items"]}
+    assert set(labels) == {
+        "anthropic/claude-sonnet-4",
+        "claude-haiku-4",
+        "gpt-5",
+        "copilot/claude-sonnet-4",
+    }
+    assert labels["claude-haiku-4"]["detail"] == "Anthropic"
+    assert "facts" not in labels["claude-haiku-4"]
+    assert labels["anthropic/claude-sonnet-4"]["facts"] == {"in": "$3", "out": "$15"}
+    # a provider with no credentials keeps its rows, disabled with the env var that fixes it
+    assert labels["gpt-5"]["disabled"] == "set OPENAI_API_KEY"
+    assert picker["current"] == ["anthropic/claude-sonnet-4"]
+    assert picker["selected"] == "anthropic/claude-sonnet-4"
+
+
+def test_typing_filters_the_sheet_and_the_count_says_what_is_left():
+    state = Conversation()
+    state.ready = True
+    state.models = CATALOG
+    state.info = {"model": "gpt-5", "provider": "openai"}
+    built = sheet(state, events=lambda *args: None)
+    assert built.nodes()["layer.sheet"].wire()["p"]["subtitle"] == "4 models"
+    state.filter_sheet("haiku")
+    built = sheet(state)
+    picker = built.nodes()["layer.sheet"].wire()["p"]
+    assert [item["id"] for item in picker["items"]] == ["claude-haiku-4"]
+    assert picker["subtitle"] == "1 of 4 matches"
+    # no match: the sheet says so rather than showing an empty list
+    state.filter_sheet("nothing here")
+    picker = sheet(state).nodes()["layer.sheet"].wire()["p"]
+    assert picker["items"] == [] and picker["empty"] == "no model matches"
+    # before the catalog arrives, the sheet is still open, asking
+    fresh = Conversation()
+    fresh.ready = True
+    picker = sheet(fresh).nodes()["layer.sheet"].wire()["p"]
+    assert picker["empty"] == "asking Hermes…" and picker["subtitle"] == "asking Hermes…"
+
+
+def test_an_expensive_pick_puts_the_sheets_confirm_strip_up():
+    state = Conversation()
+    state.ready = True
+    state.models = CATALOG
+    state.open_sheet()
+    state.sheet.confirming = True
+    picker = sheet(state).nodes()["layer.sheet"].wire()["p"]
+    assert picker["confirm"]["act"] == "pick" and picker["confirm"]["label"] == "Switch anyway"
+
+
+def test_the_model_segment_opens_the_sheet_and_the_sheet_is_not_there_when_closed():
+    state = Conversation()
+    state.ready = True
+    state.info = {"model": "muse-spark-1.3"}
+    opened = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            model=lambda *a: opened.append(a),
+        )
+    )
+    seg = built.nodes()["dock.bar.model"].wire()["p"]
+    assert seg["text"] == "muse-spark-1.3" and seg["actions"] == {"click": "click"}
+    assert "layer.sheet" not in built.nodes()
+    state.open_sheet()
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            model=lambda *a: opened.append(a),
+        )
+    )
+    assert "layer.sheet" in built.nodes()

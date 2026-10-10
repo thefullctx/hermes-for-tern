@@ -8,6 +8,7 @@ from tern_sdk import Key
 from hermes_for_tern.app import App
 from hermes_for_tern.editor import Draft
 from hermes_for_tern.state import QUEUE, Conversation, Question
+from hermes_for_tern.views import sheet_rows
 
 
 class FakeBackend:
@@ -216,3 +217,135 @@ def test_doctor_reports_the_launcher_without_leaving_the_pane():
     said = " ".join(row.text for row in instance.state.rows)
     assert "project: /project" in said
     assert "session: live" in said
+
+
+CATALOG = {
+    "model": "claude-sonnet-4",
+    "provider": "anthropic",
+    "providers": [
+        {
+            "slug": "anthropic",
+            "name": "Anthropic",
+            "models": ["claude-sonnet-4", "claude-haiku-4"],
+            "authenticated": True,
+            "pricing": {"claude-sonnet-4": {"input": "$3", "output": "$15"}},
+        },
+        {
+            "slug": "openai",
+            "name": "OpenAI",
+            "models": ["gpt-5"],
+            "authenticated": False,
+            "key_env": "OPENAI_API_KEY",
+        },
+        {"slug": "copilot", "name": "GitHub Copilot", "models": ["claude-sonnet-4"], "authenticated": True},
+    ],
+}
+
+
+def ready(instance):
+    instance.state.session_id = "live"
+    instance.state.ready = True
+
+
+def settled(instance, result):
+    """Answer the newest request and let the loop pick the result up."""
+    instance.backend.requests[-1][2].set_result(result)
+    instance.check_requests()
+
+
+def test_the_model_command_asks_hermes_for_its_catalog_once_and_opens_the_sheet():
+    instance = app()
+    ready(instance)
+    instance.draft = Draft("/model", len("/model"))
+    instance.submit()
+    assert instance.state.sheet is not None
+    assert instance.backend.requests[-1][0] == "model.options"
+    settled(instance, CATALOG)
+    assert instance.state.models is CATALOG
+    # the sheet is already open, so a second press only refreshes it
+    instance.model_event("open")
+    assert [method for method, *_ in instance.backend.requests].count("model.options") == 2
+
+
+def test_typing_while_the_sheet_is_open_filters_it_instead_of_the_composer():
+    instance = app()
+    ready(instance)
+    instance.model_event("open")
+    instance.sheet_key(Key(name="m", text="m"))
+    assert instance.draft.text == ""
+    assert instance.state.sheet.query == "m"
+    for name, text in (("o", "o"), ("d", "d"), ("e", "e"), ("l", "l")):
+        instance.input(Key(name=name, text=text))
+    assert instance.state.sheet.query == "model"
+    assert instance.draft.text == ""
+    instance.input(Key(name="backspace"))
+    assert instance.state.sheet.query == "mode"
+    instance.input(Key(name="escape"))
+    assert instance.state.sheet is None
+
+
+def test_enter_switches_the_row_the_cursor_sits_on_and_arrows_move_it():
+    instance = app()
+    ready(instance)
+    instance.state.models = CATALOG
+    instance.state.info = {"model": "claude-sonnet-4", "provider": "anthropic"}
+    instance.model_event("open")
+    assert [row["id"] for row in sheet_rows(instance.state)] == [
+        "anthropic/claude-sonnet-4",
+        "claude-haiku-4",
+        "gpt-5",
+        "copilot/claude-sonnet-4",
+    ]
+    instance.confirm_model()
+    method, params, _ = instance.backend.requests[-1]
+    # two providers carry this name, so its value names the one this session is on
+    assert method == "config.set" and params["value"] == "anthropic/claude-sonnet-4"
+    instance.input(Key(name="down"))
+    instance.confirm_model()
+    assert instance.backend.requests[-1][1]["value"] == "claude-haiku-4"
+    instance.input(Key(name="up"))
+    instance.input(Key(name="up"))
+    instance.confirm_model()
+    assert instance.backend.requests[-1][1]["value"] == "anthropic/claude-sonnet-4"
+
+
+def test_an_expensive_model_asks_before_switching():
+    instance = app()
+    ready(instance)
+    instance.state.models = CATALOG
+    instance.state.info = {"model": "gpt-5", "provider": "openai"}
+    instance.model_event("open")
+    instance.switch_model("anthropic/claude-sonnet-4")
+    settled(instance, {"confirm_required": True, "confirm_message": "This model is expensive."})
+    assert instance.state.sheet.confirming
+    assert instance.state.rows[-1].text == "This model is expensive."
+    instance.confirm_model()
+    method, params, _ = instance.backend.requests[-1]
+    assert method == "config.set" and params["confirm_expensive_model"] is True
+
+
+def test_a_switch_mid_turn_is_held_for_the_next_turn_and_says_so():
+    instance = app()
+    ready(instance)
+    instance.state.begin("work")
+    instance.state.models = CATALOG
+    instance.state.info = {"model": "gpt-5", "provider": "openai"}
+    instance.model_event("open")
+    instance.switch_model("anthropic/claude-sonnet-4")
+    settled(instance, {"value": "anthropic/claude-sonnet-4", "deferred": True})
+    assert instance.state.sheet is None
+    assert [d.text for d in instance.state.dispatches] == ["model switches when this turn ends"]
+
+
+def test_a_row_pick_switches_straight_away():
+    instance = app()
+    ready(instance)
+    instance.state.models = CATALOG
+    instance.state.info = {"model": "gpt-5", "provider": "openai"}
+    instance.model_event("open")
+    instance.model_event("pick", "anthropic/claude-sonnet-4")
+    assert instance.backend.requests[-1][1]["value"] == "anthropic/claude-sonnet-4"
+    instance.state.sheet = None
+    instance.model_event("open")
+    instance.model_event("pick", "copilot/claude-sonnet-4")
+    assert instance.backend.requests[-1][1]["value"] == "copilot/claude-sonnet-4"
