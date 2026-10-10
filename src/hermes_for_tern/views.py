@@ -376,7 +376,8 @@ def transcript_row(
     if row.kind == "errands":
         return errand_list(row)
     if row.kind == "tool":
-        body = ui.diff(row.diff, key="diff") if row.diff else clipped_output(row)
+        # No output, no well: a tool that printed nothing, or one redrawn from a resumed session.
+        body = ui.diff(row.diff, key="diff") if row.diff else clipped_output(row) if row.text else None
         running = row.status == "running"
         if row.agents:
             body = delegation(row, watch)
@@ -1080,6 +1081,10 @@ def view(
         )
     if not secret_ask and not clarification:
         dock.append(slash_list(state, draft, commands))
+    if state.exit_armed is not None:
+        dock.append(
+            ui.text([ui.span("Press Ctrl+C again to exit", "muted")], role="exit-hint", key="exit-hint")
+        )
     dock.append(
         ui.editor(
             mask(active_draft.text) if secret_ask else active_draft.text,

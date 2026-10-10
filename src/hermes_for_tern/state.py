@@ -19,6 +19,8 @@ FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
 # Hermes names that tool `todo_list`; `todo` is its legacy alias.
 QUIET_TOOLS = {"todo_list", "todo"}
+# Seconds a first Ctrl+C waits for the second that leaves.
+EXIT_WINDOW = 2.0
 # Seconds of silence while thinking after which Hermes is musing and the pen writes its working mark.
 MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.
@@ -274,6 +276,8 @@ class Conversation:
         self.session_id: str | None = None
         self.stored_session_id: str | None = None
         self.title: str = ""  # what Hermes named this session, when it has
+        self.resumed = False  # picked up from Hermes's store (`--resume`, `-c`) rather than started here
+        self.exit_armed: float | None = None  # when a first Ctrl+C asked for a second to leave
         self.info: dict = {}
         self.busy = False
         self.ready = False
@@ -321,6 +325,29 @@ class Conversation:
         self.rows.append(row)
         self.touch()
         return row
+
+    def arm_exit(self, now: float) -> None:
+        self.exit_armed = now
+        self.touch()
+
+    def restore(self, messages: list, info: dict) -> None:
+        """Redraw a resumed session from what Hermes kept of it: your messages, its replies, and the
+        tools it ran, finished and without their output, which Hermes does not keep for display."""
+        count = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role, text = message.get("role"), str(message.get("text") or "")
+            if role in ("user", "assistant") and text.strip():
+                self.add(role, text)
+                count += 1
+            elif role == "tool":
+                name = str(message.get("name") or "tool")
+                self.add("tool", name=name, target=str(message.get("context") or ""), status="done")
+        self.title = str(info.get("title") or self.title)
+        self.resumed = True
+        named = f" “{self.title}”" if self.title else ""
+        self.add("notice", f"Resumed{named} · {count} message{'s' * (count != 1)} before this.")
 
     def begin(self, text: str) -> None:
         self.last_prompt = text
@@ -399,6 +426,9 @@ class Conversation:
         """Reveal streamed text smoothly, however bursty its arrival."""
         dt = min(0.1, max(0.0, now - self._paced_at))
         self._paced_at = now
+        if self.exit_armed is not None and now - self.exit_armed >= EXIT_WINDOW:
+            self.exit_armed = None
+            self.touch()
         musing = (
             self.busy and self.activity == "Thinking" and not self.questions and now - self.heard >= MUSING
         )

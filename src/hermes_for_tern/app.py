@@ -34,7 +34,15 @@ class App:
         self.session = session
         self.command = command
         self.cwd = cwd
-        self.options = {key: value for key, value in options.items() if key != "demo"}
+        self.options = {
+            key: value for key, value in options.items() if key not in ("demo", "resume", "continue_last")
+        }
+        # The session to pick up instead of starting one: an id or title, or "latest", Hermes's word
+        # for the newest (what a bare `-c` continues).
+        continued = options.get("continue_last")
+        self.resume: str | None = options.get("resume") or (
+            continued if isinstance(continued, str) else "latest" if continued else None
+        )
         self.demo_duration = options.get("demo")
         self.state = Conversation()
         self.draft = Draft()
@@ -108,6 +116,10 @@ class App:
             finally:
                 if self.backend:
                     self.backend.close(self.state.session_id)
+        # The surface is gone; the pane's own terminal keeps this in its scrollback.
+        hint = self.resume_hint()
+        if hint:
+            print(hint, flush=True)
         return 1 if self.state.failed else 0
 
     def render(self) -> None:
@@ -194,6 +206,8 @@ class App:
                 if time.monotonic() > deadline:
                     if method == "complete.slash":
                         self.asked.pop(future, None)  # the list keeps this pane's own commands
+                    elif method in ("session.resume", "session.most_recent"):
+                        self.start_fresh(f"Hermes did not find {self.resume!r} in time")
                     elif method in ("session.create", "client.capabilities"):
                         self.fail(f"Timed out waiting for {method}.")
                     else:
@@ -206,22 +220,24 @@ class App:
             try:
                 result = future.result()
                 if method == "client.capabilities":
-                    params = {
-                        "cwd": str(self.cwd),
-                        "cwd_explicit": True,
-                        "source": "tui",
-                        "title": "Hermes for Tern",
-                        "cols": self.session.caps.cols or 80,
-                        **self.options,
-                    }
-                    self.request("session.create", params)
+                    if self.resume == "latest":
+                        self.request("session.most_recent", self.profiled())
+                    elif self.resume:
+                        self.request("session.resume", self.profiled(session_id=self.resume, cols=self.cols))
+                    else:
+                        self.create_session()
+                elif method == "session.most_recent":
+                    if result.get("session_id"):
+                        self.request(
+                            "session.resume", self.profiled(session_id=result["session_id"], cols=self.cols)
+                        )
+                    else:
+                        self.start_fresh("There is no earlier session to continue")
+                elif method == "session.resume":
+                    self.session_ready(result, stored=result.get("session_key") or result.get("resumed"))
+                    self.state.restore(result.get("messages") or [], result.get("info") or {})
                 elif method == "session.create":
-                    self.state.session_id = result["session_id"]
-                    self.state.stored_session_id = result.get("stored_session_id")
-                    self.state.info.update(result.get("info") or {})
-                    self.state.ready = True
-                    self.state.activity = "Ready"
-                    self.state.touch()
+                    self.session_ready(result, stored=result.get("stored_session_id"))
                     if self.demo_duration is not None:
                         self.submit(f"Run a {self.demo_duration:g}-second simulated visual demo.")
                 elif method == "session.interrupt":
@@ -254,6 +270,8 @@ class App:
                 elif method in ("slash.exec", "command.dispatch"):
                     command = self.asked.pop(future, "")
                     self.state.add("notice", f"{command.split(' ')[0]}: {exc}")
+                elif method in ("session.resume", "session.most_recent"):
+                    self.start_fresh(f"Could not resume {self.resume!r}: {exc}")
                 elif method in ("client.capabilities", "session.create"):
                     self.fail(str(exc))
                 else:
@@ -263,6 +281,53 @@ class App:
                         self.state.activity = "Ready"
         # Requests scheduled by the handlers above must survive this iteration.
         self.pending = remaining + self.pending
+
+    @property
+    def cols(self) -> int:
+        return self.session.caps.cols or 80
+
+    def profiled(self, **params) -> dict:
+        """Params for a call that reaches Hermes's session store, in the launch profile's home."""
+        profile = self.options.get("profile")
+        return {**params, **({"profile": profile} if profile else {})}
+
+    def create_session(self) -> None:
+        params = {
+            "cwd": str(self.cwd),
+            "cwd_explicit": True,
+            "source": "tui",
+            "title": "Hermes for Tern",
+            "cols": self.cols,
+            **self.options,
+        }
+        self.request("session.create", params)
+
+    def start_fresh(self, why: str) -> None:
+        """A resume that could not happen starts a new session instead of leaving the pane dead."""
+        self.state.add("notice", f"{why}. This is a new session.")
+        self.resume = None
+        self.create_session()
+
+    def session_ready(self, result: dict, *, stored: str | None) -> None:
+        self.state.session_id = result["session_id"]
+        self.state.stored_session_id = stored
+        self.state.info.update(result.get("info") or {})
+        self.state.ready = True
+        self.state.activity = "Ready"
+        self.state.touch()
+
+    def resume_hint(self) -> str:
+        """What Hermes's own terminal says on the way out: how to come back to this session. Nothing
+        when the session never held a conversation, since Hermes keeps no record of it then."""
+        stored = self.state.stored_session_id
+        if not stored or not (self.state.last_prompt or self.state.resumed):
+            return ""
+        profile = self.options.get("profile")
+        flag = f" -p {profile}" if profile and profile not in ("default", "custom") else ""
+        lines = ["Resume this session with:", f"  hermes --resume {stored}{flag}"]
+        if self.state.title:
+            lines.append(f'  hermes -c "{self.state.title}"{flag}')
+        return "\n".join(lines)
 
     def server_request(self, frame: dict) -> None:
         assert self.backend
@@ -778,12 +843,16 @@ class App:
             if item.ctrl and item.name == "d" and not draft.text:
                 self.exit = True
             elif item.ctrl and item.name == "c":
-                if self.state.busy:
-                    self.stop()
-                elif draft.text:
-                    draft.replace(0, len(draft.text), "")
-                else:
+                # One press stops the turn or clears the draft; leaving takes a second press within
+                # EXIT_WINDOW, so a stray Ctrl+C never closes Hermes.
+                if self.state.exit_armed is not None:
                     self.exit = True
+                else:
+                    if self.state.busy:
+                        self.stop()
+                    elif draft.text:
+                        draft.replace(0, len(draft.text), "")
+                    self.state.arm_exit(time.monotonic())
             elif self.slash_key(item):
                 pass
             elif self.sheet_key(item):

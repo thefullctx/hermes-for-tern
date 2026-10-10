@@ -127,6 +127,9 @@ def native_options(args: list[str]) -> dict | None:
     parser.add_argument("--profile", "-p")
     parser.add_argument("--tui", action="store_true")
     parser.add_argument("--demo", nargs="?", const=300.0, type=float)
+    # Hermes's own ways back into a session: `--resume <id|title|latest>`, and `-c [title]`.
+    parser.add_argument("--resume", "-r")
+    parser.add_argument("--continue", "-c", dest="continue_last", nargs="?", const=True)
     try:
         parsed, unknown = parser.parse_known_args(args)
     except SystemExit:

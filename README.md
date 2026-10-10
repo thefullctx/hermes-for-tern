@@ -213,6 +213,12 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Stop and a new prompt after interruption.
 - Backend error reporting and orderly terminal restoration.
 - Existing model/provider/profile configuration; chat flags `--model`, `--provider`, `--profile` and `--tui`.
+- Picking a session back up, as in Hermes's own terminal: `hermes --resume <id or title>`,
+  `hermes --resume latest`, `hermes -c` (the most recent session) and `hermes -c "<title>"` open the
+  native view with the conversation redrawn (your messages, Hermes's replies and the tools it ran),
+  ready for the next message. A session that cannot be found says so and starts a new one. On the way
+  out, the pane prints how to come back: `hermes --resume <id>`, and `hermes -c "<title>"` once
+  Hermes has named the session.
 - Ordinary Hermes subcommands, including `hermes model`, `hermes doctor` and `hermes --version`,
   pass directly to the original command.
 
@@ -226,7 +232,7 @@ and it never automatically approves a request.
 | Enter | Send a prompt, answer a clarification, allow once on a pending approval, or switch model with the sheet open |
 | 1–9 | Pick the choice shown on an approval or clarification card |
 | Shift+Enter / Alt+Enter | Insert a newline |
-| Ctrl+C | Stop an active turn; clear a draft when idle; exit when idle with an empty draft |
+| Ctrl+C | Stop an active turn, or clear the draft; a second Ctrl+C within two seconds exits, so a stray press never does |
 | Escape | Stop the active turn; deny a pending approval; put the model sheet away |
 | Ctrl+D with an empty draft | Exit |
 | `/` on an empty draft | Opens the command list; keep typing to narrow it, ↑/↓ to move, Tab to complete, Enter to run, Escape to close |
@@ -279,7 +285,7 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 
 ## MVP boundaries
 
-One live conversation per process. Session browsing/resume, restart recovery, attachments,
+One live conversation per process. Session browsing from inside the pane, restart recovery, attachments,
 voice and desktop browser bridges are not implemented. A session that runs for hundreds of turns
 draws its newest 60 and says how many are left out (`… N earlier turns`), so a pane stays responsive
 however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Hermes commands that switch sessions
@@ -323,10 +329,10 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 108 tests covering streaming/interim/final message ordering, paced
+The current suite contains 112 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
+turns and Hermes's signature and working pen, resuming a session, the two-press Ctrl+C exit, Unicode edits, server-request answers, withdrawn
 approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
 the watched subagent and its steer, the render window, the session title and the
 follow-up queue, the composer's live command list and Hermes's slash commands, process disconnection, reversible launcher installation and demo

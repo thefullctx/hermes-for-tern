@@ -13,9 +13,12 @@ def test_supported_chat_options_and_original_cli_passthrough():
         ["--help"],
         ["--version"],
         ["--run-module", "tui_gateway.entry"],
-        ["--resume", "id"],
     ):
         assert launcher.native_options(args) is None
+    # Hermes's ways back into a session open natively too
+    assert launcher.native_options(["--resume", "20261011_abc"]) == {"resume": "20261011_abc"}
+    assert launcher.native_options(["-c"]) == {"continue_last": True}
+    assert launcher.native_options(["-c", "Flaky test hunt"]) == {"continue_last": "Flaky test hunt"}
 
 
 def test_install_uninstall_preserves_original_launcher_exactly(tmp_path, monkeypatch):

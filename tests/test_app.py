@@ -648,3 +648,87 @@ def test_hermes_refusals_and_prefills_are_shown_as_hermes_says_them():
     instance.run_command("/compress")
     answer(instance, "slash.exec", error={"code": 4009, "message": "Hermes is busy; try when the turn ends."})
     assert instance.state.rows[-1].text == "/compress: Hermes is busy; try when the turn ends."
+
+
+def resuming_app(**options):
+    instance = App(SimpleNamespace(caps=SimpleNamespace(cols=100)), [], Path("/project"), options)
+    instance.backend = FakeBackend()
+    instance.request("client.capabilities", {"server_requests": True})
+    answer(instance, "client.capabilities", {})
+    return instance
+
+
+STORED = {
+    "session_id": "live-2",
+    "session_key": "20261011_abc",
+    "info": {"title": "Flaky test hunt", "model": "m"},
+    "messages": [
+        {"role": "user", "text": "Why does CI fail?"},
+        {"role": "assistant", "text": "Let me look."},
+        {"role": "tool", "name": "terminal", "context": "uv run pytest -q"},
+        {"role": "assistant", "text": "The fixture closes the pipe early."},
+    ],
+}
+
+
+def test_resume_picks_up_the_stored_session_and_redraws_it():
+    instance = resuming_app(resume="20261011_abc")
+    assert instance.backend.requests[-1][:2] == (
+        "session.resume",
+        {"session_id": "20261011_abc", "cols": 100},
+    )
+    answer(instance, "session.resume", STORED)
+    state = instance.state
+    assert state.session_id == "live-2" and state.stored_session_id == "20261011_abc" and state.ready
+    assert [row.kind for row in state.rows] == ["user", "assistant", "tool", "assistant", "notice"]
+    assert state.rows[2].target == "uv run pytest -q" and state.rows[2].status == "done"
+    assert state.rows[-1].text == "Resumed “Flaky test hunt” · 3 messages before this."
+    assert instance.resume_hint() == (
+        'Resume this session with:\n  hermes --resume 20261011_abc\n  hermes -c "Flaky test hunt"'
+    )
+
+
+def test_continue_takes_the_newest_session_and_a_missing_one_starts_fresh():
+    instance = resuming_app(continue_last=True, profile="work")
+    assert instance.backend.requests[-1][:2] == ("session.most_recent", {"profile": "work"})
+    answer(instance, "session.most_recent", {"session_id": "20261010_xyz"})
+    assert instance.backend.requests[-1][1]["session_id"] == "20261010_xyz"
+    answer(instance, "session.resume", error={"code": 4007, "message": "session not found"})
+    assert instance.backend.requests[-1][0] == "session.create"
+    assert "session.create" != instance.backend.requests[-1][1].get("resume")  # no resume flag leaks in
+    assert "This is a new session." in instance.state.rows[-1].text
+
+    nothing = resuming_app(continue_last=True)
+    answer(nothing, "session.most_recent", {"session_id": None})
+    assert nothing.backend.requests[-1][0] == "session.create"
+
+
+def test_a_session_that_never_spoke_leaves_no_resume_hint():
+    instance = ready_app()
+    instance.state.stored_session_id = "20261011_new"
+    assert instance.resume_hint() == ""
+    instance.state.begin("hello")
+    instance.options["profile"] = "work"
+    assert instance.resume_hint() == "Resume this session with:\n  hermes --resume 20261011_new -p work"
+
+
+def test_one_ctrl_c_never_leaves_two_in_a_row_do():
+    import time
+
+    instance = ready_app()
+    instance.input(Key(name="c", ctrl=True))
+    assert not instance.exit and instance.state.exit_armed is not None
+    instance.input(Key(name="c", ctrl=True))
+    assert instance.exit
+
+    # the first press stops a running turn or clears the draft, and the window closes after a while
+    instance = ready_app()
+    instance.state.begin("hello")
+    instance.input(Key(name="c", ctrl=True))
+    assert instance.backend.requests[-1][0] == "session.interrupt" and not instance.exit
+    instance.state.pace(time.monotonic() + 3)
+    assert instance.state.exit_armed is None
+    instance.state.busy = False  # the turn has ended
+    instance.draft = Draft("half a thought", 14)
+    instance.input(Key(name="c", ctrl=True))
+    assert instance.draft.text == "" and not instance.exit

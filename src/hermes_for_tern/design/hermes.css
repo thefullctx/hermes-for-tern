@@ -3,7 +3,8 @@
    to right-aligned facts, tree rules under results, color as the only hierarchy, all on a
    1040px measure. Gold is Hermes. Program sheets reach only this surface's regions. */
 [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
-[data-role='activity'], [data-role='fuel'], [data-role='dispatches'], [data-role='slash-list'] {
+[data-role='activity'], [data-role='fuel'], [data-role='dispatches'], [data-role='slash-list'],
+[data-role='exit-hint'] {
   --hft-gold: light-dark(#805c20, #d5b475);
   --hft-gold-wash: light-dark(#805c2012, #d5b47512);
   --hft-gold-line: light-dark(#805c2040, #d5b47540);
@@ -158,7 +159,10 @@
 .hft-button.hft-primary .hft-hint { color: var(--hft-gold); opacity: 0.65; }
 
 /* ---------- held follow-ups: what ⏎ will send when this turn ends */
-.sf.sf-text[data-role='queued-hint'] { color: var(--hft-faint); line-height: var(--hft-lh); }
+.sf.sf-text[data-role='exit-hint'] {
+  box-sizing: border-box; width: 100%; max-width: 1040px; margin: 0 auto 6px; padding: 0 16px;
+  font-family: var(--hft-mono); font-size: 12px; }
+.sf.sf-text:is([data-role='queued-hint'], [data-role='exit-hint']) { color: var(--hft-faint); line-height: var(--hft-lh); }
 .sf.sf-row[data-role='queued-line'] { align-items: baseline; gap: calc(0.5 * var(--hft-cw)); }
 .sf.sf-row[data-role='queued-line'] [data-role='queued'] {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
