@@ -176,6 +176,15 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   `Escape` to put it away; clicking a row switches straight away. `/model <name>` switches without
   the sheet. A model Hermes calls expensive asks first; a pick made mid-turn is held for the next
   turn start and says so, and the status strip follows what Hermes reports back.
+- A watched subagent: click a child's row to open its live transcript (`subagent.tail`, refreshed),
+  with interrupt and a line to steer it (`subagent.steer`; a child past its last tool batch misses it,
+  which the dispatch says). Steer is typed while watching, `Enter` sends, `Escape` stops watching.
+- Masked answers to the one-string asks Hermes makes mid-turn — a sudo password, a named secret, a
+  vault master password, a one-time code — typed in the composer as `••••` and sent with `Enter`; an
+  empty answer is Hermes's own word for "skipped", so `Escape` declines. The answer is never drawn,
+  never logged and never kept once sent.
+- `/btw <question>` asks Hermes beside the work it is doing, over a snapshot of the conversation; the
+  answer arrives as a dispatch. `/bg <task>` hands it a task on a fresh agent, answered when done.
 - A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
   the ring, with the new level floating above the composer under a lamp. The ring sends
   `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
@@ -205,15 +214,16 @@ and it never automatically approves a request.
 | Escape | Stop the active turn; deny a pending approval; put the model sheet away |
 | Ctrl+D with an empty draft | Exit |
 | With the model sheet open | Type to filter, ↑/↓ to move the cursor, Enter to switch, Escape to close |
+| While watching a subagent | Type a line to steer it, Enter to send, Escape to stop watching |
 | Native selection / undo shortcuts | Handled through Tern's edit and undo events |
 
 The composer stays editable while Hermes works: `Enter` holds your message and sends it the moment
 the turn ends, rather than discarding it. Digits only pick a clarification option while the answer box
 is still empty, so typing a number into a free-text answer types a number.
 
-`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit` and `/model` are local
-commands, answered in the pane. A slash command Hermes does not implement is refused with a pointer
-to `/help` rather than sent to the model.
+`/help`, `/clear`, `/cost`, `/retry`, `/doctor`, `/stop`, `/quit`, `/exit`, `/model`, `/btw` and `/bg`
+are local commands, answered in the pane. A slash command Hermes does not implement is refused with a
+pointer to `/help` rather than sent to the model.
 
 ## Restore the original command
 
@@ -252,15 +262,17 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 
 ## MVP boundaries
 
-One live conversation per process. Session browsing/resume, restart recovery, model pickers,
-attachments, voice and desktop browser bridges are not implemented. Slash commands are limited to
+One live conversation per process. Session browsing/resume, restart recovery, attachments,
+voice and desktop browser bridges are not implemented. Slash commands are limited to
 the local set above; anything meant for the model is refused rather than forwarded.
-Subagents show their goal, status, current tool and totals, nested by parent; their transcripts
-and per-agent controls (watch, steer, interrupt) are not available yet. The visual demo shows
+Subagents show their goal, status, current tool and totals, nested by parent; click one to watch its
+live transcript, steer it a line or interrupt it. The visual demo shows
 sequential work phases, not subagents.
 Unsupported Hermes launch flags fall back to the original interface rather than being silently discarded.
-Unsupported server requests, including secret/sudo/vault entry, receive an explicit unsupported-method
-error so they cannot leave the agent waiting indefinitely.
+Hermes's one-string asks (`sudo`, `secret`, `vault.unlock_prompt`, `vault.code`) are answered in the
+composer, masked; the answer is sent and kept nowhere. Other server requests — `tour`, `preview.act`,
+`preview.read`, `terminal.read`, `window.read`, `vault.save_login` and the desktop bridges — receive an
+explicit unsupported-method error so they cannot leave the agent waiting indefinitely.
 
 Tern's inline surface disappears when you return to the shell prompt. Hermes owns durable conversation
 storage; the Tern transcript is not a persistence layer. Multiplexers such as tmux disable SDK detection.
@@ -289,13 +301,13 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 83 tests covering streaming/interim/final message ordering, paced
+The current suite contains 91 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
-approvals, unretryable failures and their error surface, the model sheet and its switch, process disconnection,
-reversible launcher installation
-and demo completion/interruption. They use temporary
+approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
+the watched subagent and its steer, process disconnection, reversible launcher installation and demo
+completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 
 ## Contributing

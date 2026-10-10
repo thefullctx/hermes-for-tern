@@ -87,8 +87,9 @@ def test_multiple_clarifications_and_multiselect_answer_together():
 def test_unsupported_request_fails_promptly_and_busy_submit_is_held():
     instance = app()
     instance.state.session_id = "live"
-    instance.server_request({"id": "srq-s", "method": "secret", "params": {"session_id": "live"}})
+    instance.server_request({"id": "srq-t", "method": "tour", "params": {"session_id": "live"}})
     assert instance.backend.answers[0][2]["error"]["code"] == -32601
+    assert instance.state.rows[-1].text.startswith("This frontend does not support tour")
     instance.state.ready = True
     instance.state.busy = True
     instance.submit("Do something")
@@ -349,3 +350,136 @@ def test_a_row_pick_switches_straight_away():
     instance.model_event("open")
     instance.model_event("pick", "copilot/claude-sonnet-4")
     assert instance.backend.requests[-1][1]["value"] == "copilot/claude-sonnet-4"
+
+
+def test_a_masked_ask_is_answered_from_the_composer_and_never_shown():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.surface = SimpleNamespace(focus=lambda _: None)
+    instance.server_request(
+        {
+            "id": "srq-s",
+            "method": "secret",
+            "params": {"session_id": "live", "env_var": "GITHUB_TOKEN", "prompt": "Token?"},
+        }
+    )
+    assert instance.state.secret() is not None
+    # typing is masked in the view and the real value never reaches the wire as a row
+    from hermes_for_tern.views import mask
+
+    instance.input(Key(name="g", text="g"))
+    for ch in "hp_abc123":
+        instance.input(Key(name=ch, text=ch))
+    assert mask(instance.secret.text) == "••••••••••"
+    editors = [node.wire() for node in built_nodes(instance) if node.wire().get("k") == "editor"]
+    assert [editor["p"]["text"] for editor in editors] == ["••••••••••"]
+    # and the answer itself appears nowhere in what the pane is sent
+    shown = [node.wire().get("p", {}).get("text") for node in built_nodes(instance)]
+    assert "ghp_abc123" not in [value for value in shown if isinstance(value, str)]
+    instance.submit()
+    assert instance.backend.answers == [("srq-s", {"value": "ghp_abc123"}, {})]
+    assert not instance.state.questions
+    assert instance.secret.text == ""  # the answer is not kept once it is sent
+
+
+def test_escape_skips_a_masked_ask_the_way_hermes_words_it():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.surface = SimpleNamespace(focus=lambda _: None)
+    instance.server_request(
+        {"id": "srq-v", "method": "vault.code", "params": {"session_id": "live", "site": "bank"}}
+    )
+    instance.input(Key(name="escape"))
+    assert instance.backend.answers == [("srq-v", {"value": ""}, {})]
+
+
+def test_a_side_question_goes_to_hermes_and_its_answer_arrives_as_a_dispatch():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.state.ready = True
+    instance.side_question("what is the capital of France?")
+    method, params, _ = instance.backend.requests[-1]
+    assert method == "prompt.btw" and params["text"] == "what is the capital of France?"
+    instance.backend.events.put(
+        {
+            "method": "event",
+            "params": {
+                "session_id": "live",
+                "type": "btw.complete",
+                "payload": {"task_id": "t1", "question": "what is the capital of France?", "text": "Paris."},
+            },
+        }
+    )
+    instance.read_backend()
+    assert [d.text for d in instance.state.dispatches] == ["what is the capital of France?"]
+    assert [d.sub for d in instance.state.dispatches] == ["Paris."]
+
+
+def test_a_watched_child_reports_its_tail_and_can_be_interrupted_or_steered():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.state.begin("audit")
+    instance.state.event(
+        "subagent.start", {"subagent_id": "a1", "goal": "check the tests", "task_index": 0, "model": "small"}
+    )
+    instance.watch_agent("a1")
+    assert instance.state.watch is not None
+    method, params, _ = instance.backend.requests[-1]
+    assert method == "subagent.tail" and params["subagent_id"] == "a1"
+    instance.backend.requests[-1][2].set_result(
+        {"subagent_id": "a1", "available": True, "text": "reading tests…", "truncated": True}
+    )
+    instance.check_requests()
+    assert instance.state.watch.tail == "reading tests…" and instance.state.watch.truncated
+
+    instance.input(Key(name="r", text="r"))
+    for ch in "un faster":
+        instance.input(Key(name=ch, text=ch))
+    assert instance.state.watch.steer == "run faster"
+    instance.input(Key(name="enter"))
+    method, params, _ = instance.backend.requests[-1]
+    assert method == "subagent.steer" and params["text"] == "run faster"
+    assert instance.state.watch.steer == ""
+    instance.backend.requests[-1][2].set_result(
+        {"status": "queued", "subagent_id": "a1", "text": "run faster"}
+    )
+    instance.check_requests()
+    assert [d.text for d in instance.state.dispatches] == ["steered the child"]
+
+    instance.interrupt_agent()
+    assert instance.backend.requests[-1][0] == "subagent.interrupt"
+    instance.input(Key(name="escape"))
+    assert instance.state.watch is None
+
+
+def test_typing_in_the_composer_is_the_watchs_line_while_a_child_is_watched():
+    instance = app()
+    instance.state.session_id = "live"
+    instance.state.watch = None
+    instance.watch_agent("a1")
+    instance.draft = Draft("a thought of my own")
+    instance.input(Key(name="x", text="x"))
+    assert instance.state.watch.steer == "x"
+    assert instance.draft.text == "a thought of my own"
+
+
+def built_nodes(instance):
+    from hermes_for_tern.views import view
+
+    from pathlib import Path as _Path
+
+    tree = view(
+        instance.state,
+        instance.draft,
+        instance.answer_draft,
+        _Path("/project"),
+        lambda: None,
+        lambda *a: None,
+        lambda *a: None,
+        lambda *a: None,
+        lambda *a: None,
+        secret=instance.secret,
+    )
+    from tern_sdk.reconcile import View
+
+    return View.build(tree).nodes().values()

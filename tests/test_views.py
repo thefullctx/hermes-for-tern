@@ -510,3 +510,80 @@ def test_the_model_segment_opens_the_sheet_and_the_sheet_is_not_there_when_close
         )
     )
     assert "layer.sheet" in built.nodes()
+
+
+def test_a_masked_ask_cards_and_the_composer_hides_the_answer():
+    state = Conversation()
+    state.ready = True
+    state.session_id = "live"
+    state.begin("clear the build")
+    state.questions["srq-s"] = Question(
+        "srq-s", "sudo", {"session_id": "live", "command": "rm -rf /var/lib/build"}
+    )
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, secret=Draft("hunter2"))
+    )
+    assert ids_with_role(built, "secret") == ["main.canvas.r1.srq-s"]
+    card = built.nodes()["main.canvas.r1.srq-s"].wire()["p"]
+    assert card["head"][0]["t"] == "Hermes needs your password"
+    assert "rm -rf /var/lib/build" in built.nodes()["main.canvas.r1.srq-s.command"].wire()["p"]["text"]
+    editor = built.nodes()["dock.composer"].wire()["p"]
+    assert editor["text"] == "•••••••" and editor["placeholder"] == "Password…"
+
+
+def test_a_watched_child_shows_its_tail_with_interrupt_and_steer():
+    state = Conversation()
+    state.ready = True
+    state.begin("audit")
+    state.event(
+        "subagent.start", {"subagent_id": "a1", "goal": "check the tests", "task_index": 0, "model": "small"}
+    )
+    state.event("subagent.tool", {"subagent_id": "a1", "goal": "check the tests", "tool_name": "read_file"})
+    state.open_watch("a1")
+    state.watch.steer = "run faster"
+    state.watch_tail({"subagent_id": "a1", "available": True, "text": "reading tests…", "truncated": True})
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, watch=lambda *a: None)
+    )
+    assert "layer.watch" in built.nodes()
+    tail = built.nodes()["layer.watch.tail"].wire()["p"]
+    assert tail["text"] == "reading tests…"
+    assert built.nodes()["layer.watch.truncated"].wire()["p"]["text"].startswith("└─")
+    steer = built.nodes()["layer.watch.steer"].wire()["p"]
+    assert [span["t"] for span in steer["spans"]] == ["steer › ", "run faster"]
+    for action in ("interrupt", "steer", "close"):
+        assert f"layer.watch.actions.{action}" in built.nodes()
+    # a child with no transcript yet says so rather than showing an empty code block
+    state.watch_tail({"subagent_id": "a1", "available": False})
+    built = View.build(
+        view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, watch=lambda *a: None)
+    )
+    assert "layer.watch.empty" in built.nodes()
+
+
+def test_a_subagent_row_opens_its_watch():
+    state = Conversation()
+    state.ready = True
+    state.begin("audit")
+    state.event("subagent.start", {"subagent_id": "a1", "goal": "check the tests", "task_index": 0})
+    opened = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            watch=lambda sid: opened.append(sid),
+        )
+    )
+    agent = next(node.wire()["p"] for node in built.nodes().values() if node.wire().get("k") == "agent")
+    assert agent["actions"] == {"click": "click"}
+    assert not opened  # the row is a button; nothing is watched until it is pressed
+    # and the row carries no watch of its own to open
+    state.open_watch("a1")
+    assert state.watch is not None and state.watch.id == "a1"

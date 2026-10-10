@@ -9,8 +9,8 @@ from typing import Callable
 
 from tern_sdk import ui
 
-from .editor import Draft
-from .state import Agent, Conversation, Dispatch, Question, Row
+from .editor import Draft, utf16_len
+from .state import SECRET_METHODS, Agent, Conversation, Dispatch, Question, Row
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
@@ -56,7 +56,7 @@ def trail(row: Row, now: float) -> list:
     return marks
 
 
-def subagent(agent: Agent, children: dict[str | None, list[Agent]]):
+def subagent(agent: Agent, children: dict[str | None, list[Agent]], watch: Callable | None = None):
     """One delegated child as Tern's agent row; its own children nest under it."""
     now = time.time()
     running = agent.status == "running"
@@ -69,7 +69,8 @@ def subagent(agent: Agent, children: dict[str | None, list[Agent]]):
         ui.text(summary, tone="muted", role="subagent-summary", key="summary")
         if summary and not running
         else None,
-        *(subagent(child, children) for child in children.get(agent.id, [])),
+        *(subagent(child, children, watch) for child in children.get(agent.id, [])),
+        on_click=(lambda _: watch(agent.id)) if watch else None,
         name=f"#{agent.index + 1}",
         task=agent.goal[:200],
         status=agent.status,
@@ -87,13 +88,15 @@ def subagent(agent: Agent, children: dict[str | None, list[Agent]]):
     )
 
 
-def delegation(row: Row):
+def delegation(row: Row, watch: Callable | None = None):
     ids = {agent.id for agent in row.agents}
     children: dict[str | None, list[Agent]] = {}
     for agent in row.agents:
         children.setdefault(agent.parent if agent.parent in ids else None, []).append(agent)
     return ui.col(
-        *(subagent(agent, children) for agent in children.get(None, [])), role="agents", key="agents"
+        *(subagent(agent, children, watch) for agent in children.get(None, [])),
+        role="agents",
+        key="agents",
     )
 
 
@@ -327,7 +330,11 @@ def clipped_output(row: Row):
 
 
 def transcript_row(
-    row: Row, state: Conversation, retry: Callable | None = None, assets: dict[str, str] | None = None
+    row: Row,
+    state: Conversation,
+    retry: Callable | None = None,
+    assets: dict[str, str] | None = None,
+    watch: Callable | None = None,
 ):
     if row.kind == "thought":
         return thought(row, state)
@@ -337,7 +344,7 @@ def transcript_row(
         body = ui.diff(row.diff, key="diff") if row.diff else clipped_output(row)
         running = row.status == "running"
         if row.agents:
-            body = delegation(row)
+            body = delegation(row, watch)
         elif row.name == "search_files" and row.result and not running:
             body = search_tree(row) or body
         elif running:
@@ -477,6 +484,92 @@ def brand_image(assets: dict[str, str], name: str, size: int, *, key: str, role:
             on_click=lambda _: None,
         )
     return ui.icon("sparkle", tone="accent", key=key, role=role)
+
+
+def mask(text: str) -> str:
+    """A secret as the pane sees it: one dot per UTF-16 unit, so the caret still lines up."""
+    return "•" * utf16_len(text)
+
+
+def secret_card(question: Question):
+    """Hermes is waiting for one typed answer — a password, a key, a code. The answer is typed in
+    the composer, masked; Enter sends it, Escape skips, which is Hermes's own word for declining."""
+    p = question.params
+    method = question.method
+    if method == "sudo":
+        title, body = "Hermes needs your password", p.get("command") or "A command needs elevated rights."
+    elif method == "secret":
+        title = f"Hermes needs {p.get('env_var') or 'a value'}"
+        body = p.get("prompt") or "A tool asked for a value."
+    elif method == "vault.unlock_prompt":
+        title = f"Unlock {p.get('display_name') or p.get('backend') or 'the vault'}"
+        body = "Hermes needs the master password to reach your saved credentials."
+    else:  # vault.code
+        title = "Hermes needs a one-time code"
+        body = p.get("hint") or p.get("site") or "Read the code from your device."
+    return ui.card(
+        ui.code(str(body), wrap=True, key="command"),
+        ui.text("Type it in the composer; Enter sends it, Escape skips.", tone="muted", key="hint"),
+        head=[ui.span(title), ui.span("  masked", "dim")],
+        variant="bare",
+        role="secret",
+        key=question.rid,
+    )
+
+
+def subagent_sheet(state: Conversation, events: Callable | None):
+    """A delegated child, watched: its live transcript, refreshed while it runs, with interrupt
+    and steer. It owns the keyboard while it is open (see App.watch_key)."""
+    watch = state.watch
+    if watch is None:
+        return None
+    agent = state.agents.get(watch.id)
+    running = agent.status == "running" if agent else False
+    facts = []
+    if agent:
+        facts += [
+            ui.text([ui.span("goal   ", "dim"), ui.span(agent.goal[:120] or "—")], key="goal"),
+            ui.text([ui.span("model  ", "dim"), ui.span(agent.model or "—")], key="model"),
+            ui.text(
+                [ui.span("tool   ", "dim"), ui.span(agent.tool or "—", fx="shimmer" if running else None)],
+                key="tool",
+            ),
+            ui.text(
+                [
+                    ui.span("counts ", "dim"),
+                    ui.span(f"{agent.tools} tools · {agent.tokens or 0} tokens"),
+                ],
+                key="counts",
+            ),
+        ]
+    body = (
+        ui.code(watch.tail, wrap=True, key="tail")
+        if watch.available
+        else ui.text("This child has no transcript yet.", tone="muted", key="empty")
+    )
+    return ui.card(
+        ui.col(*facts, gap="sm", key="facts"),
+        body,
+        ui.text("└─ earlier output left out" if watch.truncated else None, tone="muted", key="truncated"),
+        ui.text([ui.span("steer › ", "accent"), ui.span(watch.steer)], key="steer"),
+        ui.html.div(
+            button("interrupt", lambda: events("interrupt"), key="interrupt"),
+            button("steer ⏎", lambda: events("steer"), primary=True, key="steer"),
+            button("close", lambda: events("close"), key="close"),
+            class_="hft-actions",
+            key="actions",
+        )
+        if events
+        else None,
+        head=[
+            ui.span("Watching"),
+            ui.span(f"  #{agent.index + 1}" if agent else f"  {watch.id}", "dim"),
+            ui.span(f"  {watch.id}", "dim"),
+        ],
+        variant="bare",
+        role="watch",
+        key="watch",
+    )
 
 
 def signature(assets: dict[str, str] | None, use: str, height: int, *, role: str, key: str = "signature"):
@@ -696,6 +789,8 @@ def view(
     retry: Callable | None = None,
     effort: Callable | None = None,
     model: Callable | None = None,
+    secret: Draft | None = None,
+    watch: Callable | None = None,
 ) -> dict:
     assets = assets or {}
     model = str(state.info.get("model") or "Connecting…")
@@ -705,7 +800,7 @@ def view(
         if row.visible or row.kind in ("tool", "errands"):
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
-            turns[-1][1].append(transcript_row(row, state, retry, assets))
+            turns[-1][1].append(transcript_row(row, state, retry, assets, watch))
     welcome = not turns
     rows: list = []
     if welcome:
@@ -757,8 +852,10 @@ def view(
     clarification = state.clarify()
     if clarification:
         asks.append(clarification_card(clarification, choose, skip))
+    asks += [secret_card(q) for q in state.questions.values() if q.method in SECRET_METHODS]
     (rows if welcome else turns[-1][1]).extend(asks)
-    active_draft = answer_draft if clarification else draft
+    secret_ask = state.secret()
+    active_draft = (secret or Draft()) if secret_ask else (answer_draft if clarification else draft)
     dock = []
     if state.failed:
         dock.append(ui.text(state.activity, tone="error", role="activity", key="working"))
@@ -776,13 +873,18 @@ def view(
         )
     dock.append(
         ui.editor(
-            active_draft.text,
+            mask(active_draft.text) if secret_ask else active_draft.text,
             cursor=active_draft.caret,
             key="composer",
             role="composer",
             tone="pending" if state.busy else None,
-            placeholder="Your answer…"
-            if clarification
+            placeholder={
+                "sudo": "Password…",
+                "secret": "Value…",
+                "vault.unlock_prompt": "Master password…",
+                "vault.code": "Code…",
+            }.get(secret_ask.method if secret_ask else "", "Your answer…")
+            if secret_ask or clarification
             else "Draft your next message…"
             if state.busy
             else "What would you like to work on?",
@@ -883,6 +985,7 @@ def view(
         "layer": ui.col(
             ui.html.div(*rows, class_="hft-welcome-stage", role="stage", key="stage") if welcome else None,
             model_sheet(state, model),
+            subagent_sheet(state, watch),
             dispatches(
                 state.dispatches,
                 (
