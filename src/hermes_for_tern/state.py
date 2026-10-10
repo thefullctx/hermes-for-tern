@@ -17,7 +17,8 @@ FADE = (0.12, 0.32, 0.6)
 # A finished thought stays readable, then fades; after FOLD seconds it folds to one line.
 FOLD = 5.5
 # Tools whose work is drawn elsewhere (the todo tool's list is the turn's errands).
-QUIET_TOOLS = {"todo"}
+# Hermes names that tool `todo_list`; `todo` is its legacy alias.
+QUIET_TOOLS = {"todo_list", "todo"}
 # Seconds of silence while thinking after which Hermes is musing and the pen writes its working mark.
 MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.

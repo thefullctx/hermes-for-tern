@@ -236,6 +236,20 @@ def test_errands_do_not_split_a_streaming_reply():
     assert [row.text for row in state.rows if row.kind == "assistant"] == ["First half, second half."]
 
 
+def test_the_todo_tool_is_quiet_under_both_the_current_and_legacy_name():
+    # Hermes names the tool `todo_list`; its snapshot is the errands row, so the tool must not
+    # also print the whole list as JSON beside it.
+    snapshot = {"todos": [{"id": "0", "content": "t0", "status": "in_progress"}], "revision": 1}
+    for name in ("todo_list", "todo"):
+        state = Conversation()
+        state.begin("work")
+        state.event("tool.start", {"tool_id": "t", "name": name, "args": {}})
+        state.event("todo.updated", snapshot)
+        state.event("tool.complete", {"tool_id": "t", "name": name, "result": snapshot, "duration_s": 0.1})
+        assert [row.kind for row in state.rows] == ["user", "errands"], name
+        assert [i["status"] for i in state.rows[1].items] == ["in_progress"]
+
+
 def test_late_reasoning_is_placed_above_the_reply_it_belongs_to():
     state = Conversation()
     state.begin("why?")

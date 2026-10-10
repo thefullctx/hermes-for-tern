@@ -277,10 +277,11 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 49 tests covering streaming/interim/final message ordering, paced
+The current suite contains 73 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns and Hermes's signature and working pen, Unicode edits, server-request answers, process disconnection, reversible launcher installation
+turns and Hermes's signature and working pen, Unicode edits, server-request answers, withdrawn
+approvals, unretryable failures and their error surface, process disconnection, reversible launcher installation
 and demo completion/interruption. They use temporary
 directories and a controlled backend, without touching your Hermes configuration or calling a model.
 
