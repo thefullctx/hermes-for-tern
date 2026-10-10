@@ -826,6 +826,18 @@ def model_rows(state: Conversation) -> list[dict]:
     return rows
 
 
+def by_provider(rows: list[dict]) -> list:
+    """The sheet's order: each provider's models under a header naming it, in Hermes's order."""
+    providers: dict[str, list[str]] = {}
+    for row in rows:
+        providers.setdefault(str(row["detail"]), []).append(row["id"])
+    order: list = []
+    for name, ids in providers.items():
+        order.append({"group": name, "label": name, "count": len(ids)})
+        order.extend(ids)
+    return order
+
+
 def ago(started: float) -> str:
     """How long ago, the way a list of sessions says it: `just now`, `5 min`, `3 h`, `2 d`."""
     seconds = max(0, time.time() - started)
@@ -927,8 +939,11 @@ def model_sheet(state: Conversation, events: Callable | None):
         subtitle=f"{len(rows)} of {len(model_rows(state))} matches"
         if sheet.query.strip()
         else (f"{len(rows)} models" if rows else "asking Hermes…"),
+        # The query is drawn as the sheet's search field; typing reaches it through App.sheet_key.
+        query=sheet.query,
+        cursor=utf16_len(sheet.query),
         items=rows,
-        order=[row["id"] for row in rows],
+        order=by_provider(rows),
         current=[chosen] if chosen else None,
         selected=current_model(state) or None,
         total=len(rows),
@@ -969,13 +984,15 @@ def sessions_sheet(state: Conversation, events: Callable | None):
     total = len(session_rows(state))
     return ui.picker(
         title="Resume a session",
+        query=sheet.query,
+        cursor=utf16_len(sheet.query),
         subtitle=f"{len(rows)} of {total} match"
         if sheet.query.strip()
         else (f"{total} recent sessions" if state.sessions is not None else "asking Hermes…"),
         items=rows,
         order=[row["id"] for row in rows],
         current=[chosen] if chosen else None,
-        selected=[state.stored_session_id] if state.stored_session_id else None,
+        selected=state.stored_session_id or None,
         total=len(rows),
         empty="no session matches" if state.sessions else "asking Hermes…",
         placeholder="type to filter",

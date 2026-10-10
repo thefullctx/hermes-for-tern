@@ -752,3 +752,23 @@ def test_the_welcome_fades_under_the_list_and_aliases_are_offered_once():
     nodes = build(state, Draft("/c", 2)).nodes()
     assert nodes["layer.stage"].wire()["p"]["class"] == "hft-welcome-stage hft-tucked"
     assert "dock.slash.row-/compress" in nodes and "dock.slash.row-/compact" not in nodes
+
+
+def test_the_sheet_shows_its_search_field_and_groups_models_by_provider():
+    state = Conversation()
+    state.ready = True
+    state.models = CATALOG
+    state.info = {"model": "gpt-5", "provider": "openai"}
+    state.open_sheet()
+    picker = sheet(state).nodes()["layer.sheet"].wire()["p"]
+    assert picker["query"] == "" and picker["cursor"] == 0
+    headers = [entry for entry in picker["order"] if isinstance(entry, dict)]
+    assert [(h["label"], h["count"]) for h in headers] == [
+        ("Anthropic", 2),
+        ("OpenAI", 1),
+        ("GitHub Copilot", 1),
+    ]
+    assert picker["order"][1] == "anthropic/claude-sonnet-4"  # each header is followed by its models
+    state.filter_sheet("son")
+    picker = sheet(state).nodes()["layer.sheet"].wire()["p"]
+    assert picker["query"] == "son" and picker["cursor"] == 3

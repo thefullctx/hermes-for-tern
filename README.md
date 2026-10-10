@@ -176,7 +176,8 @@ earlier in `PATH`, preserving the existing launcher at its original location.
   `/doctor` reports the launcher, backend command, protocol version and session in the pane.
 - The model sheet: `/model` (or a click on the model name in the status strip) opens Hermes's whole
   catalog as a native sheet over the composer — every model of every provider, with its price and
-  the credential a provider without one needs. Type to filter, arrows to move, `Enter` to switch,
+  the credential a provider without one needs, under a heading per provider. A search field at the
+  top shows what you type: typing filters, arrows move, `Enter` switches,
   `Escape` to put it away; clicking a row switches straight away. `/model <name>` switches without
   the sheet. A model Hermes calls expensive asks first; a pick made mid-turn is held for the next
   turn start and says so, and the status strip follows what Hermes reports back.
@@ -337,7 +338,7 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 116 tests covering streaming/interim/final message ordering, paced
+The current suite contains 117 tests covering streaming/interim/final message ordering, paced
 streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
 failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
 turns and Hermes's signature and working pen, resuming and switching sessions, the two-press Ctrl+C exit, Unicode edits, server-request answers, withdrawn
