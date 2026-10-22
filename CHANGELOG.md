@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Image attachments
+
+- Handle Tern's empty image-paste signal with a bounded local clipboard snapshot; add Paste image,
+  Attach image and `/attach` / `/paste-image` controls for PNG/JPEG.
+- Preview, remove and send images with or without text. Keep immutable image snapshots with queued
+  messages and their session destination; queue overflow retains both text and images.
+- Upload through Hermes's existing attachment API immediately before the associated prompt, with
+  acknowledged staging, rollback on cancellation/rejection, and reconnection after uncertain sends.
+- Extend private recovery to image drafts, queues and retained sends, preserving old text records.
+  Detect missing snapshots and clean up only old, unreferenced adapter-owned copies.
+- Include image filenames in search and metadata in Markdown export; do not embed image bytes.
+
 ### Reliability and recovery
 
 - Preserve all queued messages when the queue reaches eight; leave overflow in the composer.

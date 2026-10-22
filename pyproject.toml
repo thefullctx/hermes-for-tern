@@ -5,7 +5,10 @@ description = "A native Tern frontend for Hermes Agent."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["tern-sdk==0.1.0"]
+dependencies = [
+    "pillow>=12,<13",
+    "tern-sdk==0.1.0",
+]
 
 [project.scripts]
 hermes-for-tern = "hermes_for_tern.launcher:main"

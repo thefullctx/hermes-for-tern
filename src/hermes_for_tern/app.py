@@ -12,6 +12,8 @@ from pathlib import Path
 
 from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent, VisibleEvent
 
+from .attachment_app import Attachments
+from .messages import ImageRef, Message
 from .editor import Draft
 from .recovery import RecoveryStore
 from .transcript import markdown, matches
@@ -34,7 +36,7 @@ SESSIONS = 50
 NOTE_CHARS, NOTE_LINES = 180, 2
 
 
-class App:
+class App(Attachments):
     def __init__(self, session, command: list[str], cwd: Path, options: dict):
         self.session = session
         self.command = command
@@ -66,7 +68,7 @@ class App:
         self.completing: Future | None = None
         self.typed = ""  # the draft the command list's cursor was placed for
         self.switching: str | None = None  # the session `/resume` is picking up in this pane
-        self.held_switch: list[str] = []
+        self.held_switch: list[Message] = []
         self.request_sessions: dict[Future, str] = {}
         self.recovering = False
         self.recovery_error = False
@@ -78,6 +80,7 @@ class App:
         self._retired: list[threading.Thread] = []
         self.gateway: dict = {}
         self.uncertain_work = False
+        self.init_images()
 
     def request(self, method: str, params: dict | None = None) -> Future:
         assert self.backend
@@ -106,6 +109,11 @@ class App:
                     self.store = RecoveryStore(self.cwd, self.options.get("profile"))
                     self.saved_records = self.store.records()
                     self.update_saved()
+                    if self.image_store:
+                        try:
+                            self.image_store.collect()
+                        except OSError:
+                            pass
                 try:
                     self.backend = Backend(self.command, self.cwd)
                 except (OSError, RuntimeError) as exc:
@@ -115,6 +123,7 @@ class App:
                 while not self.exit and not self.session.closed and not surface.closed:
                     self.read_backend()
                     self.check_requests()
+                    self.poll_images()
                     if (
                         not self.state.ready
                         and not self.state.failed
@@ -140,6 +149,7 @@ class App:
                 while not self.exit and not self.session.closed and not surface.closed:
                     self.read_backend()
                     self.check_requests()
+                    self.poll_images()
                     self.state.pace(time.monotonic())
                     self.save_drafts()
                     self.render()
@@ -147,6 +157,15 @@ class App:
                     if item is not None:
                         self.input(item)
             finally:
+                if self.image_load:
+                    try:
+                        self.image_load.result(timeout=8)
+                    except Exception:
+                        pass
+                    self.poll_images()
+                if self.inflight:
+                    self.state.held_message = self.inflight
+                    self.state.held_uncertain = True
                 self.save_drafts(force=True)
                 if self.backend:
                     self.backend.close(self.state.session_id)
@@ -182,6 +201,7 @@ class App:
                 self.pick_command,
                 self.resume_session,
                 self.local_action,
+                self.image_path if self.image_path_open else None,
             )
         )
         if self.backend:
@@ -196,6 +216,12 @@ class App:
     def fail(self, message: str) -> None:
         if self.state.failed:
             return
+        if self.inflight:
+            self.state.held_message = self.inflight
+            self.state.held_uncertain = True
+            self.inflight = None
+        self.delivery = None
+        self.state.image_preparing = False
         self.state.add("error", message)
         self.state.failed = True
         self.state.ready = False
@@ -242,7 +268,9 @@ class App:
                 self.draft.text,
                 self.state.queued + self.held_switch,
                 self.switching or self.state.stored_session_id,
-                self.state.busy or self.uncertain_work,
+                self.state.busy or self.uncertain_work or self.state.held_uncertain,
+                images=self.state.draft_images,
+                pending=self.inflight or self.state.held_message,
             )
             self._save_failed = False
         except OSError:
@@ -301,7 +329,15 @@ class App:
         if not self.state.ready and not self.state.failed:
             self.state.add("notice", "Wait for Hermes to finish connecting before restoring saved text.")
             return
-        if self.state.busy or self.switching or self.draft.text or self.state.queued:
+        if (
+            self.state.busy
+            or self.switching
+            or self.draft.text
+            or self.state.queued
+            or self.state.draft_images
+            or self.state.image_loading
+            or self.state.held_message
+        ):
             self.state.add(
                 "notice",
                 "Finish this turn and send or clear your current draft and queue before restoring saved text.",
@@ -322,8 +358,26 @@ class App:
         record = self.restoring
         if not record:
             return
+        if self.draft.text or self.state.draft_images or self.state.image_loading or self.state.queued:
+            self.restoring = None
+            self.state.add(
+                "notice",
+                "Your current draft changed while restoring. Saved work is still available; clear this draft and restore again.",
+            )
+            return
         self.draft = Draft(record["draft"], len(record["draft"]))
-        self.state.queued = list(record["queue"])
+        self.state.queued = [Message.read(message) for message in record["queue"]]
+        self.state.draft_images = tuple(ImageRef.read(image) for image in record.get("draft_images", []))
+        self.state.held_message = (
+            Message.read(record["pending"]) if record.get("pending") is not None else None
+        )
+        self.state.held_uncertain = bool(record.get("uncertain"))
+        images = list(self.state.draft_images)
+        images += [image for message in self.state.queued for image in message.images]
+        if self.state.held_message:
+            images += list(self.state.held_message.images)
+        for image in images:
+            self.register_image(image)
         self.state.queue_paused = True
         # Write our replacement before removing the original recovery file.
         self.save_drafts(force=True)
@@ -343,6 +397,9 @@ class App:
     def continue_queue(self) -> None:
         if not self.state.ready or self.state.failed or self.switching or self.state.busy:
             return
+        if self.state.held_message:
+            self.state.add("notice", "Restore or discard the retained message before continuing the queue.")
+            return
         self.state.queue_paused = False
         self.send_queued()
         self.state.touch()
@@ -352,14 +409,19 @@ class App:
             self.state.queued
             and not self.state.queue_paused
             and not self.switching
+            and self.delivery is None
+            and self.state.held_message is None
+            and not self.state.busy
             and self.state.ready
             and not self.state.failed
         ):
-            text = self.state.take_queued()
-            self.state.begin(text)
-            self.request("prompt.submit", self.scoped(text=text))
+            message = self.state.take_queued()
+            self.send_message(message)
 
     def local_action(self, action: str) -> None:
+        if action.startswith("image-"):
+            self.attachment_action(action)
+            return
         if action == "reconnect":
             self.reconnect()
         elif action == "new-session":
@@ -424,6 +486,8 @@ class App:
                         self.answer_draft = Draft()
                     if old_secret and old_secret is not self.state.secret():
                         self.secret = Draft()
+                    if kind == "message.complete" and self.delivery is None:
+                        self.inflight = None
                     if busy and not self.state.busy:
                         self.send_queued()
             elif "method" in frame and "id" in frame and not self.state.failed:
@@ -489,7 +553,18 @@ class App:
                     self.held_switch.clear()
                     recovering = self.recovering
                     if previous or recovering:
-                        queued = list(self.state.queued) if recovering else []
+                        queued = (
+                            list(self.state.queued)
+                            if recovering
+                            or (
+                                self.switching
+                                and self.state.queued
+                                and all(
+                                    message.destination == self.switching for message in self.state.queued
+                                )
+                            )
+                            else []
+                        )
                         self.state.switched()
                         self.state.queued = queued
                         self.state.close_sheet()
@@ -516,8 +591,13 @@ class App:
                         self.request("session.close", {"session_id": previous})
                     if self.restoring:
                         self.apply_restored()
-                    for text in held:
-                        self.state.queue(text)
+                    for message in held:
+                        self.state.queue(Message(message.text, message.images, self.state.stored_session_id))
+                    if not recovering and self.state.queued:
+                        self.state.queued = [
+                            Message(message.text, message.images, self.state.stored_session_id)
+                            for message in self.state.queued
+                        ]
                     if held:
                         self.continue_queue()
                     self.save_drafts(force=True)
@@ -714,6 +794,12 @@ class App:
         self.state.touch()
 
     def stop(self) -> None:
+        if self.delivery and self.delivery.phase != "submit":
+            self.delivery.cancelled = True
+            self.state.queue_paused = True
+            self.state.activity = "Cancelling image send"
+            self.state.touch()
+            return
         self.state.queue_paused = True
         self.state.touch()
         if self.state.busy and self.state.session_id and not self.state.failed:
@@ -984,10 +1070,8 @@ class App:
 
     def retry(self) -> None:
         """Send the last prompt again after a retryable failure."""
-        if self.state.can_retry and not self.switching:
-            prompt = self.state.last_prompt
-            self.state.begin(prompt)
-            self.request("prompt.submit", self.scoped(text=prompt))
+        if self.state.can_retry and not self.switching and not self.state.held_message:
+            self.send_message(self.state.last_message or Message(self.state.last_prompt))
 
     def submit(self, text: str | None = None) -> None:
         question = self.state.secret()
@@ -1001,8 +1085,11 @@ class App:
             if answer.strip():
                 self.answer_question(question, answer)
             return
+        if self.state.image_loading:
+            self.state.add("notice", "Wait for the image to finish importing before sending.")
+            return
         text = self.draft.text if text is None else text
-        if not text.strip():
+        if not text.strip() and not self.state.draft_images:
             if self.state.can_retry:
                 self.retry()
             return
@@ -1014,19 +1101,31 @@ class App:
             return
         if not self.state.ready or self.state.failed:
             return
+        if self.restoring:
+            self.state.add("notice", "Wait for saved work to finish restoring. Your draft is unchanged.")
+            return
+        if self.state.held_message:
+            self.state.add(
+                "notice",
+                "Restore or discard the retained message before sending another. Your draft is unchanged.",
+            )
+            return
+        message = Message(text, self.state.draft_images, self.switching or self.state.stored_session_id)
         if self.switching:
-            if len(self.held_switch) >= 8:
+            if len(self.held_switch) + len(self.state.queued) >= 8:
                 self.state.add("notice", "The switch queue is full. Your message stays in the composer.")
                 self.draft = Draft(text, len(text))
             else:
-                self.held_switch.append(text)
+                self.held_switch.append(message)
                 self.draft = Draft()
+                self.state.draft_images = ()
                 self.state.add("notice", "Message held for the session being opened.")
             self.save_drafts(force=True)
             return
         if self.state.busy or (self.state.queue_paused and self.state.queued):
-            if self.state.queue(text):
+            if self.state.queue(message):
                 self.draft = Draft()
+                self.state.draft_images = ()
             else:
                 self.state.add(
                     "notice",
@@ -1035,9 +1134,9 @@ class App:
                 self.draft = Draft(text, len(text))
             self.save_drafts(force=True)
             return
-        self.state.begin(text)
         self.draft = Draft()
-        self.request("prompt.submit", self.scoped(text=text))
+        self.state.draft_images = ()
+        self.send_message(message)
         self.save_drafts(force=True)
 
     def run_command(self, text: str) -> None:
@@ -1054,7 +1153,14 @@ class App:
             "/find-previous": "find-previous",
             "/find-close": "find-close",
         }
-        if text in local:
+        if name == "/attach":
+            if rest.strip():
+                self.load_image(rest)
+            else:
+                self.attachment_action("image-path")
+        elif text == "/paste-image":
+            self.load_image()
+        elif text in local:
             self.local_action(local[text])
         elif name == "/find":
             self.state.search_query = rest.strip()
@@ -1114,6 +1220,11 @@ class App:
         session is closed in Hermes once the other is open (its history stays in Hermes's store)."""
         if not target or not self.state.session_id or self.switching:
             return
+        if self.state.image_loading or self.state.draft_images:
+            self.state.add(
+                "notice", "Finish importing, then send or remove draft images before switching sessions."
+            )
+            return
         if self.state.busy:
             self.state.add("notice", "Finish or stop this turn before switching sessions.")
             return
@@ -1121,7 +1232,7 @@ class App:
             self.state.close_sheet()
             self.state.add("notice", "This is the session you are in.")
             return
-        if self.state.queued:
+        if self.state.queued and not all(message.destination == target for message in self.state.queued):
             self.state.add(
                 "notice", "Continue or discard the current session's queue before switching sessions."
             )
@@ -1189,11 +1300,15 @@ class App:
         if not self.state.ready or self.state.failed or self.switching:
             self.state.add("notice", "Reconnect or finish switching sessions before sending this command.")
             return
+        if self.state.held_message:
+            self.state.add("notice", "Restore or discard the retained message before sending this command.")
+            return
         if self.state.busy:
             self.state.add("notice", f"{shown.split(' ')[0]} can run when this turn ends.")
             return
         self.state.begin(shown)
         self.state.last_prompt = message
+        self.state.last_message = Message(message)
         self.request("prompt.submit", self.scoped(text=message))
 
     def switch_failed(self) -> None:
@@ -1201,12 +1316,22 @@ class App:
         self.state.switching = False
         self.state.queue_paused = True
         if self.held_switch:
-            # Retain destination-bound messages separately: never send them to the old session.
-            self.state.add(
-                "notice", "Session switch failed. Held messages were kept in your draft; none were sent."
-            )
-            text = "\n\n".join(self.held_switch + ([self.draft.text] if self.draft.text else []))
-            self.draft = Draft(text, len(text))
+            if any(message.images for message in self.held_switch):
+                self.state.add(
+                    "notice",
+                    "Session switch failed. Image messages remain paused for their destination; retry that switch or discard the queue.",
+                )
+                for message in self.held_switch:
+                    self.state.queue(message)
+            else:
+                self.state.add(
+                    "notice", "Session switch failed. Held messages were kept in your draft; none were sent."
+                )
+                text = "\n\n".join(
+                    [message.text for message in self.held_switch]
+                    + ([self.draft.text] if self.draft.text else [])
+                )
+                self.draft = Draft(text, len(text))
             self.held_switch.clear()
         self.restoring = None
         self.state.touch()
@@ -1287,7 +1412,15 @@ class App:
             else (self.answer_draft if self.state.clarify() else self.draft)
         )
         if isinstance(item, Key):
-            if item.ctrl and item.name == "d" and not draft.text:
+            if self.image_key(item):
+                pass
+            elif (
+                item.ctrl
+                and item.name == "d"
+                and not draft.text
+                and not self.state.draft_images
+                and not self.state.image_loading
+            ):
                 self.exit = True
             elif item.ctrl and item.name == "c":
                 # One press stops the turn or clears the draft; leaving takes a second press within
@@ -1297,8 +1430,10 @@ class App:
                 else:
                     if self.state.busy:
                         self.stop()
-                    elif draft.text:
+                    elif draft.text or self.state.draft_images:
                         draft.replace(0, len(draft.text), "")
+                        if draft is self.draft:
+                            self.state.draft_images = ()
                     self.state.arm_exit(time.monotonic())
             elif self.slash_key(item):
                 pass
@@ -1320,18 +1455,33 @@ class App:
                 draft.key(item)
             self.state.touch()
         elif isinstance(item, EditEvent):
-            if item.id == "dock.composer":
+            if item.id == "dock.image-path.attach-path" and self.image_path_open:
+                self.image_path.edit(item)
+                self.state.touch()
+            elif item.id == "dock.composer":
                 draft.edit(item)
                 self.state.touch()
         elif isinstance(item, UndoEvent):
-            draft.undo()
+            if item.id == "dock.image-path.attach-path" and self.image_path_open:
+                self.image_path.undo()
+            elif item.id in (None, "dock.composer"):
+                draft.undo()
             self.state.touch()
+        elif (
+            isinstance(item, SendEvent) and item.id == "dock.image-path.attach-path" and self.image_path_open
+        ):
+            self.image_path = Draft(item.text or "", len(item.text or ""))
+            self.attachment_action("image-path-submit")
         elif isinstance(item, SendEvent) and item.id == "dock.composer":
             # Tern's own send key on a command being typed runs the highlighted row, as Enter does.
             if not self.slash_key(Key(name="enter")):
                 self.submit(item.text or "")
         elif isinstance(item, FocusEvent):
-            self.surface.focus("dock.composer")
+            self.surface.focus(
+                "dock.image-path.attach-path"
+                if self.image_path_open and item.id == "dock.image-path.attach-path"
+                else "dock.composer"
+            )
         elif isinstance(item, ErrorEvent):
             self.state.add("error", f"Tern: {item.msg}")
         elif isinstance(item, VisibleEvent) and item.visible is not None:

@@ -13,6 +13,58 @@ def noop(*args):
     pass
 
 
+def test_attachment_composer_preview_remove_image_only_send_and_path_identity():
+    from hermes_for_tern.messages import ImageRef
+
+    state = Conversation()
+    state.ready = True
+    image = ImageRef("a" * 64, "example.png", "image/png", 160, 100, 500)
+    state.draft_images = (image,)
+    actions = []
+    built = View.build(
+        view(
+            state,
+            Draft(),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            submit=noop,
+            assets={"attachment:" + image.id: "blob-id"},
+            action=actions.append,
+            image_path=Draft("/tmp/example.png"),
+        )
+    )
+    nodes = built.nodes()
+    assert "dock.image-path.attach-path" in nodes
+    assert nodes["dock.bar.action"].wire()["p"]["role"] == "send"
+    assert any(node.wire().get("p", {}).get("blob") == "blob-id" for node in nodes.values())
+    removes = [(key, node) for key, node in nodes.items() if key.endswith(".remove")]
+    assert len(removes) == 1
+    assert "hft-tucked" in nodes["layer.stage"].wire()["p"]["class"]
+    state.image_loading = True
+    loading = View.build(view(state, Draft(), Draft(), Path("/p"), noop, noop, noop, noop, noop, submit=noop))
+    assert loading.nodes()["dock.bar.action"].wire()["p"]["role"] == "send-off"
+
+
+def test_sent_image_metadata_is_searchable_and_export_does_not_embed_bytes():
+    from hermes_for_tern.messages import ImageRef
+    from hermes_for_tern.transcript import markdown, matches
+
+    state = Conversation()
+    image = ImageRef("b" * 64, "diagram.png", "image/png", 80, 60, 500)
+    state.begin("Inspect")
+    state.rows[-1].images = (image,)
+    state.search_query = "diagram"
+    assert matches(state) == [state.rows[-1]]
+    output = markdown(state)
+    assert "diagram.png (image/png, 80 × 60, 500 bytes)" in output
+    assert "not embedded" in output and "data:image" not in output and image.id not in output
+
+
 def test_completed_terminal_output_is_readable_without_json_envelope():
     state = Conversation()
     state.event("tool.start", {"tool_id": "t", "name": "terminal", "args": {"command": "printf hello"}})

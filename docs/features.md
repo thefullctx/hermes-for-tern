@@ -99,7 +99,8 @@ and it never automatically approves a request.
 - Queue capacity is eight. Overflow stays in the composer and is explained.
 - Stop, interruption and failed turns pause the queue. Continue or discard it explicitly.
 - Messages submitted during a session switch wait for the confirmed destination. A failed switch
-  returns those messages to the draft; none are sent to the previous session.
+  returns text-only messages to the draft. Image messages remain paused for that destination;
+  retry the same switch or discard them. None are sent to the previous session.
 - A backend disconnect retains the transcript and ordinary drafts, clears stale questions and
   secret inputs, and marks unfinished work interrupted. Reconnect resumes Hermes's stored session
   without resending earlier work. If that fails, starting a new session is an explicit choice.
@@ -112,3 +113,44 @@ and it never automatically approves a request.
   beyond the pane's visual limit. Existing files are never overwritten. Connection diagnostics,
   approval answers and secret answers are excluded. Text in ordinary messages or tool output is
   exported as conversation content; export is not a general-purpose secret scanner.
+
+## Image attachments
+
+- Paste a copied image into the composer, click **Paste image**, or run `/paste-image`.
+  **Attach image** opens a path field; `/attach [path]` supports quoted paths, spaces, `~`, and
+  paths relative to this project. It opens no shell. PNG and JPEG are checked by their contents.
+- Previews show the filename, dimensions, size, and a **Remove** button. Send text and images
+  together, or send an image alone. The source is copied when imported; later source-file or
+  clipboard changes cannot alter the message. Import errors are visible and preserve existing text.
+- The defaults are four images per message, 8 MiB each and 20 megapixels. Set
+  `HERMES_TERN_IMAGE_MAX_COUNT` (1–16) or `HERMES_TERN_IMAGE_MAX_BYTES` (1–16777216) in the frontend's
+  environment to change count/byte limits. The pixel limit remains fixed. Oversized, malformed,
+  unsupported and missing images are rejected before prompt submission.
+- On macOS, import reads the system clipboard through `osascript`. Linux uses `wl-paste` on
+  Wayland or `xclip` on X11. Tern 0.8.3 sends an empty `paste` key for image-only clipboard data;
+  the pinned SDK has no image payload. This adapter snapshots the clipboard on the machine
+  running it. Remote shells cannot read the client's clipboard: use a local PNG/JPEG path instead.
+  Pasting an image while answering a secret or clarification does not read the clipboard.
+- Images stay with their message through the eight-entry queue and session switches. An upload
+  begins only when that message is ready. Each upload must be acknowledged before its prompt is
+  sent. Stop during preparation rolls back staged images; a rejected send also attempts rollback.
+  Hermes must support `image.attach_bytes` and `image.detach`; older backends keep the message
+  unsent with an explanation. The selected model/provider must support vision independently.
+- Timeouts, unknown acknowledgements and failed rollback require reconnection. The message is
+  retained for explicit review, the queue pauses, and nothing is automatically retried. After
+  reviewing the transcript, choose **Restore message** to place it in an empty draft, or
+  **Discard message** to remove the retained copy. A retained message must be resolved before
+  sending a new one. Restoring into a different session requires an explicit new Send.
+- Owned originals and small thumbnails live in the project/profile's recovery `images/` directory
+  under `$XDG_STATE_HOME/hermes-for-tern` (default `~/.local/state/hermes-for-tern`). Files are private
+  (0600, directory 0700), not encrypted. Recovery stores content identifiers and metadata, never
+  arbitrary source paths or inline image bytes. Version 1 text recovery records still load.
+  Missing or changed saved files produce a notice and block image delivery until replaced.
+- On startup, adapter-owned image files older than seven days are removed only if no recovery
+  record references them, including another live pane's record. Corrupt or unknown recovery data
+  prevents cleanup. Removing a preview or discarding a message releases its reference; cleanup
+  happens on a later startup. Original files and Hermes's own image copies are never deleted.
+- Sent images show previews in the current pane. Resumed history depends on the metadata Hermes
+  returns and does not reconstruct these previews. Search includes loaded image filenames.
+  Markdown exports include image metadata, not embedded image bytes. PDF, other file types,
+  voice, and additional animations are outside this milestone.

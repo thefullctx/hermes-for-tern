@@ -162,7 +162,7 @@ def test_a_message_composed_while_hermes_works_is_held_then_sent_when_the_turn_e
     instance.state.ready = True
     instance.state.begin("first")
     instance.submit("and then this")
-    assert instance.state.queued == ["and then this"]
+    assert [message.text for message in instance.state.queued] == ["and then this"]
     assert not [r for r in instance.backend.requests if r[0] == "prompt.submit"]
 
     instance.backend.events.put(
@@ -178,7 +178,7 @@ def test_the_queue_never_outgrows_its_limit_and_preserves_the_oldest():
     for index in range(QUEUE + 3):
         state.queue(f"note {index}")
     assert len(state.queued) == QUEUE
-    assert state.queued == [f"note {index}" for index in range(QUEUE)]
+    assert [message.text for message in state.queued] == [f"note {index}" for index in range(QUEUE)]
 
 
 def test_clear_empties_the_transcript_but_keeps_the_live_session():
@@ -191,7 +191,7 @@ def test_clear_empties_the_transcript_but_keeps_the_live_session():
     state.clear()
     assert not state.rows and not state.tools
     # A held follow-up is pending work, not transcript: /clear must not eat what was typed.
-    assert state.queued == ["later"]
+    assert [message.text for message in state.queued] == ["later"]
     assert state.session_id == "live" and state.ready
 
 
@@ -505,9 +505,9 @@ def test_a_held_follow_up_can_be_taken_back():
     instance.state.queue("first")
     instance.state.queue("second")
     instance.state.unqueue(0)
-    assert instance.state.queued == ["second"]
+    assert [message.text for message in instance.state.queued] == ["second"]
     instance.state.unqueue(5)
-    assert instance.state.queued == ["second"]
+    assert [message.text for message in instance.state.queued] == ["second"]
 
 
 def ready_app():

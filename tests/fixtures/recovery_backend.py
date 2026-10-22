@@ -1,5 +1,7 @@
 """Native QA backend. No model calls, credentials, shell commands, or project file changes."""
 
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -14,6 +16,7 @@ def event(kind, payload=None):
 
 
 event("gateway.ready")
+staged_images = []
 for line in sys.stdin:
     frame = json.loads(line)
     method, rid = frame.get("method"), frame.get("id")
@@ -33,8 +36,21 @@ for line in sys.stdin:
             ]
     elif method == "session.list":
         result = {"sessions": []}
+    elif method == "image.attach_bytes":
+        params = frame["params"]
+        digest = hashlib.sha256(base64.b64decode(params["content_base64"], validate=True)).hexdigest()
+        path = f"/qa/{digest}"
+        staged_images.append((path, digest[:8]))
+        result = {"attached": True, "path": path, "count": len(staged_images)}
+    elif method == "image.detach":
+        path = frame["params"]["path"]
+        before = len(staged_images)
+        staged_images = [image for image in staged_images if image[0] != path]
+        result = {"detached": len(staged_images) < before, "count": len(staged_images)}
     elif method == "prompt.submit":
         text = frame.get("params", {}).get("text", "")
+        images, staged_images = staged_images, []
+        image_notice = f" · images={len(images)} · {','.join(image[1] for image in images)}" if images else ""
         send({"id": rid, "result": {"status": "streaming"}})
         event("message.start")
         if text == "crash":
@@ -91,7 +107,7 @@ for line in sys.stdin:
                 },
             )
             event("tool.complete", {"tool_id": "delegate", "result": {"output": "Native QA completed"}})
-            event("message.complete", {"status": "complete", "text": f"Received: {text}"})
+            event("message.complete", {"status": "complete", "text": f"Received: {text}{image_notice}"})
         continue
     elif method == "session.interrupt":
         event("message.complete", {"status": "interrupted"})

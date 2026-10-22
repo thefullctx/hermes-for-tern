@@ -90,6 +90,7 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 
 - Streamed Markdown, highlighted code, tool output, and live subagent controls.
 - Native approvals, clarification questions, and masked secret input.
+- PNG/JPEG image paste and path attachments, with previews and recovery alongside each message.
 - Model selection, Hermes commands and skills, session names, resume and switching.
 - Up to eight queued follow-ups, with explicit pause/continue after Stop or failure.
 - Reconnect and resume after a backend crash, without automatically replaying work.
@@ -97,6 +98,25 @@ earlier in `PATH`, preserving the existing launcher at its original location.
 - Search across loaded history and export to Markdown.
 
 See the [full feature reference](docs/features.md) for details.
+
+## Images
+
+Paste a copied image into the composer, choose **Paste image**, or use **Attach image** and enter
+a local path (`/attach /path/to/image.png`). Text and images travel together; sending without text
+is supported. Each preview has a **Remove** button. Images queued during a turn are uploaded only
+when their own message is ready to send.
+
+The defaults are four images per message, 8 MiB per image, and 20 megapixels. PNG and JPEG are
+supported. On macOS clipboard import uses the system clipboard; Linux needs `wl-paste` for Wayland
+or `xclip` for X11. Over SSH, use a path on the machine running this frontend. Tern's current SDK
+signals an image paste without carrying its bytes, so clipboard import requires a clipboard
+accessible to that machine. Hermes must support `image.attach_bytes` and `image.detach`, and the
+selected model/provider must accept images.
+
+Draft and queued images are saved as private snapshots, so changing the clipboard or source file
+does not change a queued message. After an uncertain send, reconnect and review **Restore message**
+before resending. See [image limits and recovery](docs/features.md#image-attachments) for storage,
+cleanup, and export details.
 
 ## Recovering work
 
