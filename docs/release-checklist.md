@@ -104,3 +104,13 @@ The image PR addresses #20 without automatically closing it while these checks r
 [Image draft in a narrow pane](../assets/images/draft-narrow.png) ·
 [Four previews in dark appearance](../assets/images/multiple-narrow-dark.png) ·
 [Image draft restored after frontend termination](../assets/images/draft-restored.png)
+
+## Image drop fix — 23 October 2026
+
+- 215 automated tests pass, including native edit/paste/send paths, shell-escaped screenshot
+  filenames, quoted paths, local file URLs, failed imports and captions typed during import.
+- Actual headless Tern file drag-and-drop onto the composer imported a screenshot with spaces
+  in its name. Sending the preview delivered one image through the controlled backend, without
+  command dispatch. Pasting the equivalent escaped path also passed.
+- The native image/queue/restart checks continue to pass. This confirms local file drops;
+  the earlier OS bitmap clipboard and successful vision-provider checks remain separate.

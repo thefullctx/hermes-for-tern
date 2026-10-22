@@ -95,6 +95,8 @@ class Check:
 
         image_path = self.out / "native-clipboard.png"
         Image.new("RGB", (160, 100), "red").save(image_path)
+        dropped_path = self.out / "Screenshot 2026-10-23 at 12.00.00.png"
+        dropped_path.write_bytes(image_path.read_bytes())
         state_home = self.out / "draft-state" / str(os.getpid())
         env = {
             **os.environ,
@@ -120,6 +122,19 @@ class Check:
                 )
                 self.scenario(f"account signed-in\nsize 1200 900\nready\nrun {json.dumps(command)}")
                 self.wait("What would you like to work on?")
+                self.scenario(f'drop ".sf-editor" file {json.dumps(str(dropped_path))}')
+                self.wait_images(1)
+                self.wait(dropped_path.name)
+                self.send("dragged screenshot")
+                self.wait("Received: dragged screenshot · images=1")
+                escaped = str(dropped_path).replace(" ", r"\ ") + " "
+                self.scenario(f"clipboard text {json.dumps(escaped)}\nkey meta+v")
+                self.wait_images(1)
+                self.wait(dropped_path.name)
+                self.scenario('shot "image-path-drop"')
+                self.send("dropped screenshot")
+                self.wait("Received: dropped screenshot · images=1")
+                assert not any("Unknown command" in node.get("text", "") for node in self.nodes())
                 self.click("Attach image")
                 self.send(str(image_path))
                 self.wait("native-clipboard.png")
