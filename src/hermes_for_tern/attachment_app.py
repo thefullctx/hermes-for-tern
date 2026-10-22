@@ -122,7 +122,9 @@ class Attachments:
                     self.state.draft_images += (image,)
                     if drop_draft is not None:
                         if self.draft.text.startswith(drop_draft):
+                            cursor = max(0, self.draft.cursor - len(drop_draft))
                             self.draft.replace(0, len(drop_draft), "")
+                            self.draft.cursor = cursor
                         self.state.add("notice", "Image attached. Review the preview, then press Send.")
                     self.register_image(image)
                     self.image_path_open = False

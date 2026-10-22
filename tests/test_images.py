@@ -113,6 +113,7 @@ def test_failed_drop_keeps_path_and_newly_typed_caption_is_preserved(store, tmp_
     instance.image_load.result(timeout=2)
     instance.poll_images()
     assert instance.draft.text == "What is in this image?"
+    assert instance.draft.cursor == len(instance.draft.text)
     assert len(instance.state.draft_images) == 1
 
 
