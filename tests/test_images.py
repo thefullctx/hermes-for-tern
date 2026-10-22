@@ -333,6 +333,36 @@ def image_app(store):
     return instance
 
 
+@pytest.mark.parametrize("format,media", [("PNG", "image/png"), ("JPEG", "image/jpeg")])
+def test_zoom_preview_registers_the_original_resolution_and_type_even_without_a_thumbnail(
+    store, format, media
+):
+    instance = image_app(store)
+    output = io.BytesIO()
+    Image.new("RGB", (1800, 1200), "red").save(output, format=format)
+    data = output.getvalue()
+    image = store.add(data, "large screenshot")
+    # Old recovery records may have lost their thumbnail; the valid original still previews.
+    store.preview_path(image).unlink()
+    sent = []
+    instance.session.blob = lambda payload, mime: sent.append((payload, mime)) or "original-blob"
+    instance.register_image(image)
+    assert sent == [(data, media)]
+    with Image.open(io.BytesIO(sent[0][0])) as original:
+        assert original.size == (1800, 1200)
+    assert instance.assets["attachment:" + image.id] == "original-blob"
+
+
+def test_missing_original_never_falls_back_to_a_pixelated_thumbnail(store):
+    instance = image_app(store)
+    image = store.add(picture())
+    store.path(image).unlink()
+    instance.session.blob = lambda *_: pytest.fail("A thumbnail must not masquerade as the original")
+    instance.register_image(image)
+    assert "attachment:" + image.id not in instance.assets
+    assert any("saved image unavailable" in row.text for row in instance.state.rows)
+
+
 def test_native_empty_paste_captures_snapshot_and_queue_does_not_stage(store):
     instance = image_app(store)
     original = picture("red")

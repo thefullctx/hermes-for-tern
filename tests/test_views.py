@@ -42,6 +42,8 @@ def test_attachment_composer_preview_remove_image_only_send_and_path_identity():
     assert "dock.image-path.attach-path" in nodes
     assert nodes["dock.bar.action"].wire()["p"]["role"] == "send"
     assert any(node.wire().get("p", {}).get("blob") == "blob-id" for node in nodes.values())
+    preview = nodes["dock.image-controls.attachments.image-0.preview"].wire()["p"]
+    assert (preview["w"], preview["h"]) == (96, 72)
     removes = [(key, node) for key, node in nodes.items() if key.endswith(".remove")]
     assert len(removes) == 1
     assert "hft-tucked" in nodes["layer.stage"].wire()["p"]["class"]

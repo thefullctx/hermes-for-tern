@@ -89,14 +89,73 @@ class Check:
         x, y, width, height = node["rect"]
         self.scenario(f"click {x + width / 2} {y + height / 2}")
 
+    def check_image_preview(self, width: int, height: int) -> None:
+        frame = next(n for n in self.ctl("tree", ".sf-img-frame")["nodes"] if n["rect"][2:4] == [96.0, 72.0])
+        x, y, w, h = frame["rect"]
+        self.scenario(f"click {x + w / 2} {y + h / 2}")
+        deadline = time.monotonic() + 5
+        while True:
+            preview = self.ctl("state").get("lightbox")
+            if preview and preview.get("rect"):
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("Image preview did not open")
+            time.sleep(0.08)
+        assert not preview["failed"]
+        scale = preview["zoom"] / 100
+        assert abs(preview["rect"][2] / scale - width) < 1
+        assert abs(preview["rect"][3] / scale - height) < 1
+        time.sleep(0.2)
+        self.scenario('shot "image-preview-fit"\nclick ".ed-zoom"')
+        deadline = time.monotonic() + 5
+        while True:
+            options = self.ctl("tree", ".mi").get("nodes", [])
+            actual = next((node for node in options if node.get("text") == "100%"), None)
+            if actual:
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("Image zoom menu did not open")
+            time.sleep(0.08)
+        x, y, w, h = actual["rect"]
+        self.scenario(f"click {x + w / 2} {y + h / 2}")
+        deadline = time.monotonic() + 5
+        while True:
+            preview = self.ctl("state")["lightbox"]
+            if preview["zoom"] == 100 and preview.get("rect", [])[2:4] == [float(width), float(height)]:
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("Image did not zoom to 100%")
+            time.sleep(0.08)
+        assert preview["rect"][2:4] == [float(width), float(height)]
+        time.sleep(0.2)
+        self.scenario('shot "image-preview-100"\nkey escape')
+        deadline = time.monotonic() + 5
+        while self.ctl("state").get("lightbox"):
+            if time.monotonic() > deadline:
+                raise RuntimeError("Image preview did not close")
+            time.sleep(0.08)
+
     def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
-        from PIL import Image
+        from PIL import Image, ImageDraw, ImageFont
 
         image_path = self.out / "native-clipboard.png"
         Image.new("RGB", (160, 100), "red").save(image_path)
         dropped_path = self.out / "Screenshot 2026-10-23 at 12.00.00.png"
         dropped_path.write_bytes(image_path.read_bytes())
+        detail_path = self.out / "Full resolution detail.png"
+        detail = Image.new("RGB", (1800, 1200), "white")
+        draw = ImageDraw.Draw(detail)
+        font = ImageFont.load_default(size=28)
+        for y in range(0, 1200, 60):
+            draw.line((0, y, 1800, y), fill="#b0bdcd", width=1)
+            draw.text(
+                (24, y + 15),
+                f"Full-resolution row {y // 60:02d}   ABCDEFGHIJKLMNOPQRSTUVWXYZ   0123456789",
+                font=font,
+                fill="#17233a",
+            )
+        detail.save(detail_path)
         state_home = self.out / "draft-state" / str(os.getpid())
         env = {
             **os.environ,
@@ -122,6 +181,11 @@ class Check:
                 )
                 self.scenario(f"account signed-in\nsize 1200 900\nready\nrun {json.dumps(command)}")
                 self.wait("What would you like to work on?")
+                self.scenario(f'drop ".sf-editor" file {json.dumps(str(detail_path))}')
+                self.wait_images(1)
+                self.send("preview detail")
+                self.wait("Received: preview detail · images=1")
+                self.check_image_preview(1800, 1200)
                 self.scenario(f'drop ".sf-editor" file {json.dumps(str(dropped_path))}')
                 self.wait_images(1)
                 self.wait(dropped_path.name)
@@ -240,7 +304,7 @@ class Check:
                 self.wait("Native QA · controlled backend", absent=True)
                 assert self.ctl("state")["focused"]["last"]["status"] == 0
                 print(
-                    f"Native image path/paste, image-only send, queued images, approval, clarification, crash/resume, search and image draft restoration: OK. Screenshots: {self.out / 'serve'}"
+                    f"Native full-resolution preview/100% zoom, image path/paste, image-only send, queued images, approval, clarification, crash/resume, search and image draft restoration: OK. Screenshots: {self.out / 'serve'}"
                 )
             finally:
                 try:
