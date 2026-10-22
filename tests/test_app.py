@@ -195,13 +195,19 @@ def test_clear_empties_the_transcript_but_keeps_the_live_session():
     assert state.session_id == "live" and state.ready
 
 
-def test_doctor_reports_the_launcher_without_leaving_the_pane():
+def test_doctor_reports_the_launcher_without_leaving_the_pane(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_for_tern.diagnostics.diagnose", lambda *args, **kwargs: ["OK controlled backend."]
+    )
     instance = app()
     instance.state.session_id = "live"
     instance.run_command("/doctor")
+    next(future for method, future, _ in instance.pending if method == "local.doctor").result(timeout=2)
+    instance.check_requests()
     said = " ".join(row.text for row in instance.state.rows)
     assert "project: /project" in said
     assert "session: live" in said
+    assert "OK controlled backend." in said
 
 
 CATALOG = {

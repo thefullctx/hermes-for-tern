@@ -356,16 +356,23 @@ def test_background_completion_is_dispatched():
     )
 
 
-def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks():
+def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks(monkeypatch):
+    # Use an exactly representable origin: adding/subtracting the runner's real uptime
+    # can round the exact threshold just below MUSING on some machines.
+    now = 100.0
+    monkeypatch.setattr("hermes_for_tern.state.time.monotonic", lambda: now)
     state = Conversation()
     state.begin("hello")
     start = state.heard
-    state.pace(start + MUSING - 0.1)
+    now = start + MUSING - 0.1
+    state.pace(now)
     assert not state.musing
-    state.pace(start + MUSING)
+    now = start + MUSING
+    state.pace(now)
     assert state.musing
     state.event("message.start", {})
-    state.pace(start + MUSING + 0.1)
+    now += 0.1
+    state.pace(now)
     assert not state.musing
 
 
