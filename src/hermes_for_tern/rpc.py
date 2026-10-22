@@ -107,6 +107,9 @@ class Backend:
                 if "method" in frame:
                     self.events.put(frame)
                     continue
+                if isinstance(frame.get("local_error"), str):
+                    self.events.put({"local_error": frame["local_error"]})
+                    continue
                 rid = frame.get("id")
                 if not isinstance(rid, (int, str)):
                     self.events.put({"local_error": "Hermes emitted an invalid RPC response id"})

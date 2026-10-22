@@ -26,7 +26,7 @@ def version(command: list[str]) -> str:
         return "unavailable"
 
 
-def probe(command: list[str], cwd: Path, timeout: float = 8) -> list[str]:
+def probe(command: list[str], cwd: Path, timeout: float = 45) -> list[str]:
     backend = None
     deadline = time.monotonic() + timeout
     try:
@@ -56,7 +56,9 @@ def probe(command: list[str], cwd: Path, timeout: float = 8) -> list[str]:
             else "OK backend advertises approval and clarification requests."
         )
         lines.append(
-            "Hermes does not advertise a gateway protocol version here; this checks the handshake, not every feature."
+            "OK shared gateway protocol hermes-gateway-v1; closing this viewer leaves the owner running."
+            if result.get("gateway_protocol") == "hermes-gateway-v1"
+            else "Hermes does not advertise a gateway protocol version here; this checks the handshake, not every feature."
         )
         return lines
     except (TimeoutError, queue.Empty):

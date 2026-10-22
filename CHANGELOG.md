@@ -19,6 +19,12 @@
 
 ### Reliability and recovery
 
+- Fix startup disconnects with newer Hermes when its shared gateway already owns the profile.
+  Attach through the official bootstrap and authenticated WebSocket, translating session lifecycle,
+  image admissions, Stop and pending controls. Closing Tern detaches its viewer without stopping
+  the gateway. Preserve legacy stdio for Hermes versions without the shared bootstrap.
+- Extend the bounded doctor startup check for cold shared gateways and report the negotiated protocol.
+
 - Preserve all queued messages when the queue reaches eight; leave overflow in the composer.
 - Hold messages during session switches and route them only to the confirmed destination.
 - Pause the queue after Stop, interruption, failed turns, or a backend disconnect.

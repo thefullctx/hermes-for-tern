@@ -3,6 +3,15 @@ import sys
 from hermes_for_tern.rpc import Backend
 
 
+def test_bridge_startup_failure_reaches_the_ui_without_becoming_an_invalid_response(tmp_path):
+    script = 'import json; print(json.dumps({"local_error": "Controlled startup failure"}), flush=True)'
+    backend = Backend([sys.executable, "-c", script], tmp_path)
+    try:
+        assert backend.events.get(timeout=3) == {"local_error": "Controlled startup failure"}
+    finally:
+        backend.close()
+
+
 def test_bidirectional_rpc_interleaves_notifications_requests_and_responses(tmp_path):
     server = tmp_path / "server.py"
     server.write_text("""import json,sys

@@ -96,6 +96,18 @@ and it never automatically approves a request.
 
 ## Reliability and recovery
 
+- Newer Hermes builds share one gateway per profile. The adapter uses Hermes's official discovery
+  and ticket bootstrap, connects to its authenticated local WebSocket, and detaches only its own
+  viewer on exit. It preserves credentials, approval settings and other sessions. Older builds
+  without that bootstrap keep the legacy stdio backend; connection refusals do not bypass ownership.
+- The bridge translates durable prompt admissions, stored history, generation-bound Stop and
+  approval/clarification responses. Images are passed on the associated admission, rather than
+  left staged for an unrelated turn. Model changes use revision-fenced session mutations and
+  the owner's confirmation token. Lost connections or event-history gaps require explicit recovery.
+- Doctor allows up to 45 seconds for a cold gateway startup/handshake, without submitting a prompt.
+  With a shared gateway it reports the negotiated `hermes-gateway-v1` protocol. Raw bootstrap
+  output and authentication tickets are never printed.
+
 - Queue capacity is eight. Overflow stays in the composer and is explained.
 - Stop, interruption and failed turns pause the queue. Continue or discard it explicitly.
 - Messages submitted during a session switch wait for the confirmed destination. A failed switch
@@ -139,7 +151,8 @@ and it never automatically approves a request.
 - Images stay with their message through the eight-entry queue and session switches. An upload
   begins only when that message is ready. Each upload must be acknowledged before its prompt is
   sent. Stop during preparation rolls back staged images; a rejected send also attempts rollback.
-  Hermes must support `image.attach_bytes` and `image.detach`; older backends keep the message
+  Hermes must support shared-gateway image admissions or legacy `image.attach_bytes` and
+  `image.detach`; older backends keep the message
   unsent with an explanation. The selected model/provider must support vision independently.
 - Timeouts, unknown acknowledgements and failed rollback require reconnection. The message is
   retained for explicit review, the queue pauses, and nothing is automatically retried. After

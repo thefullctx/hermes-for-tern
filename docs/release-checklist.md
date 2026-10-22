@@ -114,3 +114,23 @@ The image PR addresses #20 without automatically closing it while these checks r
   command dispatch. Pasting the equivalent escaped path also passed.
 - The native image/queue/restart checks continue to pass. This confirms local file drops;
   the earlier OS bitmap clipboard and successful vision-provider checks remain separate.
+
+## Shared gateway startup fix — 23 October 2026
+
+- Reproduced the startup disconnect on Hermes 0.22.4: the standalone stdio entry refused to open
+  a profile already owned by a running gateway. No gateway was stopped and no lock was removed.
+- The default backend now uses the official `ui-tui.scripts.gateway_bootstrap` through the original
+  managed launcher. Bootstrap tickets remain private; the adapter connects to the authenticated
+  loopback WebSocket. Explicit backend overrides are unchanged. Only a missing bootstrap module
+  permits the older stdio path; discovery, authentication and dependency failures do not.
+- The 236-test suite includes launch policy preservation, unique session creation, history resume,
+  profile binding, viewer-only detach, image admission/rollback, owner confirmation tokens, exact
+  prompt/generation responses, queued-input cancellation, event gaps and connection loss. Real
+  socket tests verify the shared server still accepts viewers after frontend close, and that no
+  stdin reader pins a disconnected bridge process.
+- Tern 0.9.5 with the real Hermes 0.22.4 gateway: native startup, `/doctor`, orderly frontend exit,
+  and unchanged gateway instance identity afterward passed. Fresh-viewer resume and two-image
+  upload/rollback also passed. The controlled native image/recovery suite continues to pass.
+- A bounded, tool-free live text prompt was admitted and its error outcome persisted/resumed.
+  The provider still returned an error; successful model output remains unverified. Credentials,
+  provider configuration, approval policy and the Hermes installation were not changed.

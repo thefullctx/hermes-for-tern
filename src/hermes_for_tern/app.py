@@ -1377,7 +1377,7 @@ class App(Attachments):
         worker = threading.Thread(target=check, daemon=True)
         worker.start()
         self._retired.append(worker)
-        self.pending.append(("local.doctor", future, time.monotonic() + 30))
+        self.pending.append(("local.doctor", future, time.monotonic() + 60))
         self.state.add("notice", f"project: {self.cwd}")
         self.state.add("notice", f"session: {self.state.session_id or 'none'}")
         self.state.add(

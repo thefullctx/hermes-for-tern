@@ -57,7 +57,7 @@ def backend_command(original: str, config: dict) -> list[str]:
         return list(config["backend"])
     # Hermes's managed launcher bootstraps the correct interpreter and dependencies.
     # Conventional virtualenv installations can use an explicit --backend command.
-    return [original, "--run-module", "tui_gateway.entry"]
+    return [sys.executable, "-u", "-m", "hermes_for_tern.gateway_bridge", original]
 
 
 def launcher_body() -> str:
