@@ -67,11 +67,15 @@ The [visual design and motion notes](docs/design.md) describe the interface and 
 
 ### Backend compatibility
 
-The default backend command uses Hermes's managed launcher:
+The default backend uses Hermes's managed launcher and official gateway bootstrap to attach to
+its shared gateway. It starts an owner through that bootstrap only when one is needed. Closing
+this frontend detaches its viewer; other chats and the shared gateway keep running. No second
+database writer or gateway lock bypass is used.
 
-```text
-<original-hermes> --run-module tui_gateway.entry
-```
+Older Hermes builds without the gateway bootstrap retain the original
+`<original-hermes> --run-module tui_gateway.entry` backend. A failed shared connection never
+falls back to a second writer. The adapter adds its own WebSocket dependency without changing
+Hermes's managed environment.
 
 For a conventional Hermes virtualenv installation without `--run-module`, specify its backend:
 
@@ -82,6 +86,8 @@ uv run hermes-for-tern --install --backend '/absolute/path/to/hermes-venv/bin/py
 That interpreter must have Hermes's dependencies and its modules must be importable from your
 project directory. For example, install Hermes into its own virtualenv as an editable package.
 Do not install Tern dependencies into Hermes's managed environment.
+The explicit stdio override is for compatible older installations; newer Hermes refuses it when
+a shared gateway owns that profile. Omit the override to use automatic shared-gateway attachment.
 
 `--target /path/to/bin/hermes` can instead create a wrapper in a different directory placed
 earlier in `PATH`, preserving the existing launcher at its original location.
@@ -110,8 +116,8 @@ The defaults are four images per message, 8 MiB per image, and 20 megapixels. PN
 supported. On macOS clipboard import uses the system clipboard; Linux needs `wl-paste` for Wayland
 or `xclip` for X11. Over SSH, use a path on the machine running this frontend. Tern's current SDK
 signals an image paste without carrying its bytes, so clipboard import requires a clipboard
-accessible to that machine. Hermes must support `image.attach_bytes` and `image.detach`, and the
-selected model/provider must accept images.
+accessible to that machine. Hermes must support shared-gateway image admissions or the legacy
+`image.attach_bytes` / `image.detach` APIs, and the selected model/provider must accept images.
 
 Draft and queued images are saved as private snapshots, so changing the clipboard or source file
 does not change a queued message. After an uncertain send, reconnect and review **Restore message**
@@ -180,11 +186,13 @@ The uninstaller refuses to overwrite a launcher that somebody changed after inst
 ## Architecture
 
 ```text
-Tern pane ⇄ Surface Protocol ⇄ Python adapter ⇄ JSON-RPC pipes ⇄ Hermes tui_gateway
+Tern pane ⇄ Surface Protocol ⇄ Python adapter ⇄ private bridge ⇄ Hermes shared gateway
 ```
 
 - `launcher.py`: reversible installation, surface detection and original-command fallback.
 - `rpc.py`: bidirectional transport, request matching and backend lifecycle.
+- `gateway_bridge.py`: authenticated shared-gateway attachment, protocol translation and viewer
+  detachment; legacy stdio fallback only when Hermes lacks its gateway bootstrap.
 - `state.py`: ordered transcript and pending-request state.
 - `editor.py`: composer text/caret state and UTF-16 edit translation.
 - `views.py`: semantic native components: turns, tools, subagents, questions and the dock.
