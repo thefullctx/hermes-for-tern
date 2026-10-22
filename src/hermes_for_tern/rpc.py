@@ -43,6 +43,9 @@ class Backend:
         self._lock = threading.Lock()
         self._next_id = 0
         self._closing = False
+        self._outgoing: queue.Queue[dict | None] = queue.Queue()
+        self._writer_thread = threading.Thread(target=self._send, daemon=True)
+        self._writer_thread.start()
         self._reader_thread = threading.Thread(target=self._read, daemon=True)
         self._stderr_thread = threading.Thread(target=self._stderr, daemon=True)
         self._reader_thread.start()
@@ -62,16 +65,33 @@ class Backend:
             return future
 
     def answer(self, rid: str, result: dict | None = None, *, error: dict | None = None) -> None:
-        with self._lock:
-            self._write(
-                {"jsonrpc": "2.0", "id": rid, **({"error": error} if error else {"result": result or {}})}
-            )
+        self._write(
+            {"jsonrpc": "2.0", "id": rid, **({"error": error} if error else {"result": result or {}})}
+        )
 
     def _write(self, frame: dict) -> None:
         if not self.process.stdin or self.process.poll() is not None:
             raise BrokenPipeError("Hermes backend has exited")
-        self.process.stdin.write(json.dumps(frame, ensure_ascii=False) + "\n")
-        self.process.stdin.flush()
+        self._outgoing.put(frame)
+
+    def forget(self, future: Future) -> None:
+        """A UI timeout relinquishes its request; a late response cannot change sessions."""
+        with self._lock:
+            for rid, pending in list(self._pending.items()):
+                if pending is future:
+                    self._pending.pop(rid)
+                    future.cancel()
+                    break
+
+    def _send(self) -> None:
+        assert self.process.stdin
+        try:
+            while (frame := self._outgoing.get()) is not None:
+                self.process.stdin.write(json.dumps(frame, ensure_ascii=False) + "\n")
+                self.process.stdin.flush()
+        except (OSError, ValueError):
+            if not self._closing:
+                self.events.put({"local_error": "Hermes backend stopped accepting requests"})
 
     def _read(self) -> None:
         assert self.process.stdout
@@ -87,11 +107,18 @@ class Backend:
                 if "method" in frame:
                     self.events.put(frame)
                     continue
+                rid = frame.get("id")
+                if not isinstance(rid, (int, str)):
+                    self.events.put({"local_error": "Hermes emitted an invalid RPC response id"})
+                    continue
                 with self._lock:
-                    future = self._pending.pop(frame.get("id"), None)
+                    future = self._pending.pop(rid, None)
                 if future and not future.done():
                     if "error" in frame:
-                        future.set_exception(RpcError(frame["error"]))
+                        error = frame["error"]
+                        future.set_exception(
+                            RpcError(error if isinstance(error, dict) else {"message": "Invalid RPC error"})
+                        )
                     else:
                         future.set_result(frame.get("result", {}))
         finally:
@@ -116,13 +143,16 @@ class Backend:
                 self.request("session.close", {"session_id": session_id}).result(timeout=2)
             except Exception:
                 pass
-        if self.process.stdin:
+        self._outgoing.put(None)
+        self._writer_thread.join(timeout=0.2)
+        # A blocked pipe writer must never hold the UI or prevent process termination.
+        if not self._writer_thread.is_alive() and self.process.stdin:
             try:
                 self.process.stdin.close()
             except (OSError, ValueError):
                 pass
         try:
-            self.process.wait(timeout=3)
+            self.process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             self._terminate_group(signal.SIGTERM)
             try:
@@ -130,8 +160,18 @@ class Backend:
             except subprocess.TimeoutExpired:
                 self._terminate_group(signal.SIGKILL)
                 self.process.wait(timeout=2)
-        self._reader_thread.join(timeout=1)
-        self._stderr_thread.join(timeout=1)
+        # Descendant tools can outlive the gateway; close the owned group as well.
+        self._terminate_group(signal.SIGTERM)
+        for thread in (self._writer_thread, self._reader_thread, self._stderr_thread):
+            thread.join(timeout=0.2)
+        if any(
+            thread.is_alive() for thread in (self._writer_thread, self._reader_thread, self._stderr_thread)
+        ):
+            self._terminate_group(signal.SIGKILL)
+        for thread in (self._writer_thread, self._reader_thread, self._stderr_thread):
+            thread.join(timeout=1)
+        if self.process.stdin:
+            self.process.stdin.close()
         for stream in (self.process.stdout, self.process.stderr):
             if stream:
                 stream.close()

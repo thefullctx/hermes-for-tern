@@ -29,6 +29,10 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
+For native recovery and interaction checks, run `uv run python scripts/check_native.py`. It starts
+an isolated headless Tern with a controlled backend, including a deliberately terminated frontend
+to check draft restoration. It makes no model requests or changes to your Hermes/Tern settings.
+
 For visual changes, attach a screenshot or GIF. `./scripts/render_previews.sh` re-records the README
 scenes through the real views and renders them with a headless Tern (it needs Tern and ffmpeg);
 `scripts/record_motion.py` holds the scripted session if you want to show a new state.

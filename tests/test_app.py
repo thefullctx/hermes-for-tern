@@ -17,6 +17,9 @@ class FakeBackend:
         self.answers = []
         self.events = queue.Queue()
 
+    def close(self, session_id=None):
+        pass
+
     def request(self, method, params):
         future = Future()
         self.requests.append((method, params, future))
@@ -170,12 +173,12 @@ def test_a_message_composed_while_hermes_works_is_held_then_sent_when_the_turn_e
     assert [r[1]["text"] for r in instance.backend.requests if r[0] == "prompt.submit"] == ["and then this"]
 
 
-def test_the_queue_never_outgrows_its_limit_and_drops_the_oldest():
+def test_the_queue_never_outgrows_its_limit_and_preserves_the_oldest():
     state = Conversation()
     for index in range(QUEUE + 3):
         state.queue(f"note {index}")
     assert len(state.queued) == QUEUE
-    assert state.queued[0] == "note 3"
+    assert state.queued == [f"note {index}" for index in range(QUEUE)]
 
 
 def test_clear_empties_the_transcript_but_keeps_the_live_session():

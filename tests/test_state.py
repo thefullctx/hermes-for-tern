@@ -395,3 +395,13 @@ def test_the_ring_follows_the_level_hermes_reports_rather_than_the_one_asked_for
     state.effort = "high"
     state.event("session.info", {"model": "muse-spark-1.3"})
     assert state.effort == "high"
+
+
+def test_non_success_completion_pauses_queued_work_even_with_an_unfamiliar_status():
+    state = Conversation()
+    state.ready = True
+    state.begin("work")
+    state.queue("later")
+    state.event("message.complete", {"status": "cancelled"})
+    assert not state.busy and state.queue_paused
+    assert state.queued == ["later"]

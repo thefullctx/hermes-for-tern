@@ -58,63 +58,12 @@ To re-record the scenes and render every preview image (needs Tern and ffmpeg):
 ./scripts/render_previews.sh
 ```
 
-### Visual design
+### Try the demo
 
-Hermes follows the console idiom of Tern's Console chat style, whatever chat style you use:
-one monospace face on the pane's cell grid and a three-cell gutter that carries the glyphs
-(`❯` you, `●` a tool tinted by its status, `✗` an error). Tools have no frame: a title, its
-target and a dotted leader to the time, with output behind a one-pixel guide and `└─` for
-folded lines. Color is the only hierarchy, and Hermes's color is muted gold, on graphite in dark
-mode and warm ivory in light mode. Your words are matte gold and Hermes's replies matte silver,
-so who is speaking reads at a glance. The composer is one prompt line in a hairline box, above a
-flat status strip with the model, project, usage and the send or stop key.
+Inside Tern, run `uv run hermes-for-tern --demo 30` for a labelled simulation. It makes no model
+requests, runs no tools, and changes no project files.
 
-The startup screen is centered above the composer, with a staged logo/title/details entrance:
-the HERMES wordmark writes itself in, stroke by stroke in gold over its own faint outline, beside
-artwork adapted from Hermes Agent, project/model details, and three prompt suggestions.
-While Hermes works, a single line above the composer names what it is doing and for how long;
-when Hermes thinks in silence for a few seconds, its spinner gives way to the pen writing the H of
-the wordmark, again and again.
-Styling is scoped to this surface, so the surrounding Tern interface follows your theme.
-
-![Hermes startup](assets/startup.png)
-
-[Startup entrance animation](assets/entrance.gif).
-
-Code in replies is highlighted with Hermes's own palette, gold keywords beside sky-blue functions,
-sage strings, coral numbers and teal types, in a raised well with a gold edge and language label.
-
-### Continuous motion and visual demo
-
-Every step of a turn moves. Your message lifts into the transcript, and replies and tools rise in.
-Streamed text is released at an even pace however bursty the model's output, behind a gold block
-caret, and is written in gold ink that dries: the newest words appear in gold and settle into the
-text color within about half a second. A gold thread runs down the gutter through a turn's steps,
-gold while Hermes works and resting as a hairline afterwards. A finished
-turn closes with `☤ delivered · time · tokens · rate`, a line a gold front writes on before it dries, and
-Hermes signs it with the wordmark's H, whose ink dries to faint when the next turn begins; turns
-longer than a minute also release a few sparks from the `☤`. A running tool's `●` breathes and the dots of
-its leader march toward its live timer; when it finishes, the `●` pops into its outcome color and
-one ring spreads out, and a failure also shakes its line once. A gold streak sweeps the composer's
-top edge while a turn runs. The wordmark, the signatures, the thread and every underline are drawn
-with one pen: the same stroke and ease. These effects respect Reduce Motion and, apart from the
-pen's strokes inside its images, pause in hidden panes.
-
-`scripts/record_motion.py` writes the scenes behind the previews (`assets/startup.jsonl` and
-`assets/session.jsonl`); replay one with `surface-play "assets/session.jsonl" paced` in a
-`tern shot` scenario to check motion frame by frame.
-
-For a five-minute simulation inside Tern:
-
-```sh
-hermes --demo
-```
-
-It starts automatically and is visibly labelled **SIMULATED DEMO**. It runs the same native frontend
-with a deterministic backend: no model requests, shell commands, or file changes. Stop works normally.
-For a shorter run, use `hermes --demo 30` (seconds). Ordinary `hermes` still uses the real Hermes backend.
-Demo durations must be between 10 and 1,800 seconds. The demo requires Tern and does not fall back
-to the real agent in another terminal.
+The [visual design and motion notes](docs/design.md) describe the interface and its previews.
 
 ### Backend compatibility
 
@@ -137,101 +86,37 @@ Do not install Tern dependencies into Hermes's managed environment.
 `--target /path/to/bin/hermes` can instead create a wrapper in a different directory placed
 earlier in `PATH`, preserving the existing launcher at its original location.
 
-## What works
+## Core features
 
-- Native conversation UI with streamed Markdown and code blocks.
-- Multi-turn conversations using the real Hermes backend and existing tools.
-- Native tool rows with folded output, duration, outcome and optional diffs.
-- Reasoning as a thought in faint gold ink that fades and folds to `◇ pondered for 6s` when the answer
-  starts (Hermes sends reasoning when its `display.show_reasoning` setting is on).
-- Hermes's todo list as the turn's errands: one row whose items dry from gold as they are done, and a
-  pill above the composer whose gold ring fills and seals, signed with Hermes's H, when all are
-  delivered.
-- Context use as a gold hairline on the composer's top edge, amber from 80% and red from 95%.
-- Search results (`search_files`) as a file tree with line numbers, each match underlined in gold ink
-  that draws itself in.
-- Failed turns as `✗ Undelivered`, underlined in red ink, with the provider's code, and a `retry ⏎` key when Hermes marks the
-  failure retryable (Enter in an empty composer retries too). Hermes's error surface names the fix
-  first — sign in again, the environment variable to set, or when the limit lifts — so a failure it
-  did not mark retryable says so rather than offering a key that cannot work.
-- Dispatches: short notes above the composer for Hermes's notices, finished background tasks, and a
-  reply that was delivered (or failed) while the pane was hidden, shown when you come back.
-- Subagents from `delegate_task` as live rows under the call: goal, model, current tool, tool count,
-  tokens, time and a one-line summary, with grandchildren nested under their parent.
-- Composer typing, multiline paste, Unicode, native selection and basic undo.
-- Tool approval cards using the backend's offered choices, answered with the mouse or the keyboard:
-  number keys pick a choice, `Enter` allows once, `Escape` denies. An approval Hermes withdraws (an
-  interrupt, a session reap, a timeout) leaves the card saying it was denied, so it never waits for
-  an answer that can no longer be given.
-- Clarification questions: options, multiple selections, free text and skipping, with number keys
-  selecting an option while the answer box is still empty. Choices past the ninth stay clickable;
-  only the ones a key can reach are numbered.
-- Follow-ups composed while Hermes works are queued and sent when the turn ends, shown above the
-  composer as `queued · …` so nothing typed is dropped.
-- Slash commands: Hermes's own (`/compress`, `/undo`, `/context`, `/usage`, `/plan`, `/goal`, …), your
-  skills, and this pane's `/model`, `/btw`, `/bg`, `/name`, `/resume`, `/cost`, `/doctor`, `/clear`, `/stop`,
-  `/help` and `/quit`. Hermes runs its commands the way its own terminal does (`slash.exec`, then
-  `command.dispatch` for skills and commands that need the live session) and refuses what may not run
-  mid-turn itself. A short answer is a note; a long one folds to a few lines that open in place.
-  `/doctor` reports the launcher, backend command, protocol version and session in the pane.
-- The model sheet: `/model` (or a click on the model name in the status strip) opens Hermes's whole
-  catalog as a native sheet over the composer — every model of every provider, with its price and
-  the credential a provider without one needs, under a heading per provider. A search field at the
-  top shows what you type: typing filters, arrows move, `Enter` switches,
-  `Escape` to put it away; clicking a row switches straight away. `/model <name>` switches without
-  the sheet. A model Hermes calls expensive asks first; a pick made mid-turn is held for the next
-  turn start and says so, and the status strip follows what Hermes reports back.
-- A watched subagent: click a child's row to open its live transcript (`subagent.tail`, refreshed),
-  with interrupt and a line to steer it (`subagent.steer`; a child past its last tool batch misses it,
-  which the dispatch says). Steer is typed while watching, `Enter` sends, `Escape` stops watching.
-- Masked answers to the one-string asks Hermes makes mid-turn — a sudo password, a named secret, a
-  vault master password, a one-time code — typed in the composer as `••••` and sent with `Enter`; an
-  empty answer is Hermes's own word for "skipped", so `Escape` declines. The answer is never drawn,
-  never logged and never kept once sent.
-- `/btw <question>` asks Hermes beside the work it is doing, over a snapshot of the conversation; the
-  answer arrives as a dispatch. `/bg <task>` hands it a task on a fresh agent, answered when done.
-- The session's name: `/name <title>` names it through Hermes (which owns titles and echoes them
-  back, including when its auto-titler renames it). It sits on the startup screen's context line and,
-  quietly, on the status strip.
-- Follow-ups held while Hermes works can be taken back: each `queued · …` row carries its own `✕`,
-  so a thought typed by mistake never has to be sent.
-- A live command list in the composer: typing `/` opens a list right above it, one line per command
-  with what it does, Hermes's commands and your skills included (`complete.slash`), and each letter
-  narrows it; once a command takes an argument it offers Hermes's choices for that (`/personality `).
-  The rest of the highlighted command shows faintly after the caret. ↑/↓ move, Tab completes, Enter
-  runs it (`/btw`, `/bg` and `/name` wait for their argument instead), and Escape puts it away. Commands
-  that would swap the session out from under the pane, or that drive Hermes's own terminal display,
-  are left out; a slash mid-draft stays a slash.
-- A thinking-effort ring beside the model name: seven levels from `off` to `max`, stepped by pressing
-  the ring, with the new level floating above the composer under a lamp. The ring sends
-  `config.set` with `key: "reasoning"` and follows the level Hermes echoes back in `session.info`.
-  The ring's `off` travels as Hermes's `none`, because Hermes reads `off` as a display word that
-  hides reasoning without stopping thinking. Hermes also has an `ultra` above `max` that Tern's
-  ring cannot draw, so it is unreachable from here. Hermes offers no way to ask which levels a
-  model honours; it clamps silently to the nearest weaker level and reports the result as
-  `reasoning_effort_wire`, which the lamp shows when it differs from what was asked for.
-- Tool output longer than 48,000 characters says how much was left out rather than truncating silently.
-- Stop and a new prompt after interruption.
-- Backend error reporting and orderly terminal restoration.
-- Existing model/provider/profile configuration; chat flags `--model`, `--provider`, `--profile` and `--tui`.
-- Picking a session back up, as in Hermes's own terminal: `hermes --resume <id or title>`,
-  `hermes --resume latest`, `hermes -c` (the most recent session) and `hermes -c "<title>"` open the
-  native view with the conversation redrawn (your messages, Hermes's replies and the tools it ran),
-  ready for the next message. A session that cannot be found says so and starts a new one. On the way
-  out, the pane prints how to come back: `hermes --resume <id>`, and `hermes -c "<title>"` once
-  Hermes has named the session.
-- Switching sessions inside the pane: `/resume` (or `/sessions`) opens a sheet of Hermes's 50 most
-  recent sessions, newest first, each with its title (or how it began), size and age; type to filter,
-  arrows to move, `Enter` to pick one up. Its conversation replaces the transcript and this live
-  session is closed in Hermes; nothing is lost, since Hermes keeps every session. `/resume <id or
-  title>` skips the sheet, and switching waits until a running turn ends. A new session's welcome
-  offers `Continue “…”` for the last conversation. The sheet lists sessions from every project,
-  as Hermes's own picker does: Hermes's listing does not say which folder a session ran in.
-- Ordinary Hermes subcommands, including `hermes model`, `hermes doctor` and `hermes --version`,
-  pass directly to the original command.
+- Streamed Markdown, highlighted code, tool output, and live subagent controls.
+- Native approvals, clarification questions, and masked secret input.
+- Model selection, Hermes commands and skills, session names, resume and switching.
+- Up to eight queued follow-ups, with explicit pause/continue after Stop or failure.
+- Reconnect and resume after a backend crash, without automatically replaying work.
+- Private recovery of unsent ordinary drafts and queues across frontend restarts.
+- Search across loaded history and export to Markdown.
 
-The adapter respects Hermes's approval policy. It does not enable approvals when your policy is off,
-and it never automatically approves a request.
+See the [full feature reference](docs/features.md) for details.
+
+## Recovering work
+
+On a disconnect, choose **Reconnect and resume** or type `/reconnect`. Your draft and queue stay
+available. Previously submitted work may already have changed files; it is never automatically
+resent. If resume fails, retry or explicitly choose **Start new session**. Queued messages remain
+paused until you choose **Continue queue** (`/queue-continue`); **Discard queue** (`/queue-discard`)
+removes only queued messages.
+
+After a frontend restart, **Restore saved text** (`/recover`) opens the saved text's own session,
+restores its draft and queue, and sends nothing. Clear your current draft and queue first. Saved
+text is isolated by project, profile and session under
+`$XDG_STATE_HOME/hermes-for-tern` (default `~/.local/state/hermes-for-tern`), in private files.
+Ordinary text is saved at most twice a second, with immediate saves on submission and normal exit;
+a sudden kill can lose the most recent half-second of typing. Secret and clarification answers
+are excluded. **Discard saved text** deletes an offered recovery record.
+
+Use `/find <text>`, `/find-next`, `/find-previous`, and `/find-close` to search loaded history.
+Use `/export /path/to/conversation.md` to save it as Markdown. Export includes available full tool
+output; cleared/unloaded history and output Hermes did not store cannot be reconstructed.
 
 ## Keys
 
@@ -285,7 +170,10 @@ Tern pane ⇄ Surface Protocol ⇄ Python adapter ⇄ JSON-RPC pipes ⇄ Hermes 
 - `views.py`: semantic native components: turns, tools, subagents, questions and the dock.
 - `design.py` and `design/`: packaged artwork, the palette with code colors, styles and motion.
 - `demo_backend.py`: isolated simulation using the same JSON-RPC event path.
-- `app.py`: UI event loop, streaming updates, approvals, clarification and interruption.
+- `app.py`: UI event loop, streaming updates, approvals, clarification, interruption and reconnect.
+- `recovery.py`: private, atomic storage of unsent ordinary drafts and queues.
+- `diagnostics.py`: bounded startup and capability checks without an agent session.
+- `transcript.py`: search and Markdown export of loaded conversation data.
 
 The UI polls Tern input continuously while a background reader queues Hermes events.
 Render updates are batched at roughly 30 Hz; the SDK handles diffing, credits and terminal cleanup.
@@ -293,8 +181,9 @@ The backend runs in a separate process with private pipes. Its stdout never reac
 
 ## MVP boundaries
 
-One live conversation per pane at a time. Restart recovery, attachments,
-voice and desktop browser bridges are not implemented. A session that runs for hundreds of turns
+One live conversation per pane at a time. Recovery uses Hermes’s stored session and locally saved
+ordinary drafts; it cannot reconstruct work Hermes did not store. Attachments, voice and desktop
+browser bridges are not implemented. A session that runs for hundreds of turns
 draws its newest 60 and says how many are left out (`… N earlier turns`), so a pane stays responsive
 however long Hermes works; the transcript itself is not trimmed, and `/clear` still empties it. Hermes's other session commands
 (`/new`, `/branch`, …) are not offered, since the pane follows one session at a time; `/resume` is
@@ -318,19 +207,9 @@ characters it left out.
 
 ## Validation
 
-Tested locally on macOS with:
-
-- Tern `0.5.0` (`ea43dbe`).
-- Hermes `v0.21.5+7421.gffe73c3`.
-- Tern Python SDK `0.1.0`, pinned to `46bd7df153d3135d84a0b5658dfb4705d0bddb81`.
-
-Live checks exercised native rendering, streamed replies, follow-up context, real terminal tool use,
-clarification through a native button, interruption during a tool call, a successful subsequent turn,
-native Unicode selection/paste/undo, and clean exit. Allow and Deny buttons were exercised against the controlled JSON-RPC fixture because
-the local Hermes approval policy was off. The console design and its motion were checked frame by
-frame in headless Tern renders, and the real startup was checked for stylesheet errors; subagent rows
-were checked against Hermes's event contract with scripted events, not a live delegation.
-Linux and other Hermes installation methods are unverified.
+The automated suite covers message ordering, Unicode editing, approvals, session routing, queue
+limits and pausing, reconnect/resume, saved drafts, search/export, bounded diagnostics, hung pipes,
+launcher restoration, and the isolated demo.
 
 ```sh
 uv run pytest -q
@@ -338,15 +217,9 @@ uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 ```
 
-The current suite contains 117 tests covering streaming/interim/final message ordering, paced
-streaming and its fading ink, thoughts and their fold-away frame, errands and the context line,
-failures, search trees, tool failure/interruption, subagent lifecycles and nesting, delivered
-turns and Hermes's signature and working pen, resuming and switching sessions, the two-press Ctrl+C exit, Unicode edits, server-request answers, withdrawn
-approvals, unretryable failures and their error surface, the model sheet and its switch, masked asks,
-the watched subagent and its steer, the render window, the session title and the
-follow-up queue, the composer's live command list and Hermes's slash commands, process disconnection, reversible launcher installation and demo
-completion/interruption. They use temporary
-directories and a controlled backend, without touching your Hermes configuration or calling a model.
+CI runs macOS and Linux with Python 3.11, 3.13 and 3.14. The
+[release checklist and validation record](docs/release-checklist.md) distinguish controlled backend
+checks from live Hermes checks and list remaining validation limits.
 
 ## Contributing
 
