@@ -4,6 +4,8 @@
 
 ### Image attachments
 
+- Open image previews with the original PNG/JPEG pixels instead of the small chat thumbnail,
+  preserving detail when viewing at full size or zooming.
 - Recognize local image paths dropped or pasted into an empty composer before slash-command
   handling, including escaped spaces and local file URLs. Keep failed imports editable.
 

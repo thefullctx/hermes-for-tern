@@ -35,10 +35,11 @@ class Attachments:
         try:
             if self.image_store is None:
                 raise ValueError(self.image_error)
-            self.image_store.read(image)
-            data = self.image_store.preview_path(image).read_bytes()
+            # Tern opens this same blob in its zoom viewer. Keep original pixels here;
+            # the view's 96 × 72 dimensions only control the inline thumbnail.
+            data = self.image_store.read(image)
             if hasattr(self.session, "blob"):
-                self.assets["attachment:" + image.id] = self.session.blob(data, "image/png")
+                self.assets["attachment:" + image.id] = self.session.blob(data, image.media)
         except (OSError, ValueError):
             self.state.add(
                 "notice",

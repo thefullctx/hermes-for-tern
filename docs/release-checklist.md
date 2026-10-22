@@ -134,3 +134,17 @@ The image PR addresses #20 without automatically closing it while these checks r
 - A bounded, tool-free live text prompt was admitted and its error outcome persisted/resumed.
   The provider still returned an error; successful model output remains unverified. Credentials,
   provider configuration, approval policy and the Hermes installation were not changed.
+
+## Full-resolution image preview fix — 23 October 2026
+
+- Clickable images now register the validated original PNG/JPEG and its media type with Tern,
+  rather than the 96×72 thumbnail. Inline chat images keep their existing size.
+- All 239 tests pass on Python 3.11, 3.13 and 3.14, including original bytes/dimensions/media type,
+  missing-thumbnail support, missing-original rejection and unchanged inline dimensions.
+  Lint, formatting and source/wheel builds pass.
+- The real App in headless Tern opens a detailed 1800×1200 fixture at fit-to-window and 100% zoom.
+  Viewer state confirms the original dimensions, and screenshots show readable detail. The native
+  image, queue, approval, clarification, crash/resume, search and draft restoration checks pass.
+
+[Fit-to-window preview](../assets/images/image-preview-fit.png) ·
+[Preview at 100%](../assets/images/image-preview-100.png)

@@ -168,6 +168,8 @@ and it never automatically approves a request.
   record references them, including another live pane's record. Corrupt or unknown recovery data
   prevents cleanup. Removing a preview or discarding a message releases its reference; cleanup
   happens on a later startup. Original files and Hermes's own image copies are never deleted.
+- Image thumbnails stay small in chat; clicking opens the original PNG/JPEG in Tern's viewer,
+  with full-resolution detail at 100% zoom. A missing original is reported as unavailable.
 - Sent images show previews in the current pane. Resumed history depends on the metadata Hermes
   returns and does not reconstruct these previews. Search includes loaded image filenames.
   Markdown exports include image metadata, not embedded image bytes. PDF, other file types,
