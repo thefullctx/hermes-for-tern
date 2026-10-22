@@ -10,6 +10,7 @@ from typing import Callable
 from tern_sdk import ui
 
 from .editor import Draft, utf16_len
+from .transcript import matches, searchable
 from .state import SECRET_METHODS, Agent, Conversation, Dispatch, Question, Row
 
 # Keys that pick a question's choice, in the order the card shows them.
@@ -24,7 +25,16 @@ COMMAND_ROWS = (
     ("/name <title>", "name this session"),
     ("/resume [session]", "pick up an earlier session, by its id or title or from the list"),
     ("/cost", "what this session has spent"),
-    ("/doctor", "launcher, backend, protocol and session"),
+    ("/doctor", "check launcher integrity, backend startup and compatibility"),
+    ("/reconnect", "reconnect and resume without resending work"),
+    ("/recover", "restore saved text for this project and session"),
+    ("/queue-continue", "continue paused messages"),
+    ("/queue-discard", "discard queued messages"),
+    ("/find <text>", "search the loaded conversation, including older turns"),
+    ("/find-next", "show the next transcript match"),
+    ("/find-previous", "show the previous transcript match"),
+    ("/find-close", "return to the newest turns"),
+    ("/export [path]", "save loaded conversation as Markdown; never overwrite"),
     ("/clear", "empty the transcript; Hermes still remembers"),
     ("/stop", "stop the running turn"),
     ("/help", "Hermes's commands, and these"),
@@ -1084,8 +1094,10 @@ def view(
     unqueue: Callable | None = None,
     commands: Callable | None = None,
     resume: Callable | None = None,
+    action: Callable | None = None,
 ) -> dict:
     assets = assets or {}
+    action = action or (lambda _: None)
     model_name = str(state.info.get("model") or "Connecting…")
     # Each turn is its own column, so a gold thread can run down its gutter.
     turns: list[tuple[str, list[Row]]] = []
@@ -1094,10 +1106,15 @@ def view(
             if row.kind == "user" or not turns:
                 turns.append((row.key, []))
             turns[-1][1].append(row)
-    hidden = 0
-    if len(turns) > MAX_TURNS:
-        hidden = len(turns) - MAX_TURNS
-        turns = turns[hidden:]
+    found = matches(state)
+    selected = found[state.search_index % len(found)] if found else None
+    start = max(0, len(turns) - MAX_TURNS)
+    if selected:
+        at = next((i for i, (_, rows) in enumerate(turns) if selected in rows), 0)
+        start = max(0, min(at - MAX_TURNS // 2, len(turns) - MAX_TURNS))
+    hidden = start
+    later = max(0, len(turns) - start - MAX_TURNS)
+    turns = turns[start : start + MAX_TURNS]
     turns = [(key, [transcript_row(row, state, retry, assets, watch) for row in rows]) for key, rows in turns]
     welcome = not turns
     rows: list = []
@@ -1167,6 +1184,67 @@ def view(
     secret_ask = state.secret()
     active_draft = (secret or Draft()) if secret_ask else (answer_draft if clarification else draft)
     dock = []
+    if state.recovery_available:
+        dock.append(
+            ui.row(
+                ui.text(f"Saved text for {state.recovery_label}", tone="muted", key="label"),
+                button("Restore saved text", lambda: action("restore"), key="restore"),
+                button("Discard saved text", lambda: action("forget-saved"), key="forget"),
+                key="saved-text",
+                role="recovery",
+                wrap=True,
+                gap="sm",
+            )
+        )
+    if state.failed:
+        dock.append(
+            ui.row(
+                button("Reconnect and resume", lambda: action("reconnect"), primary=True, key="reconnect"),
+                button("Start new session", lambda: action("new-session"), key="new"),
+                key="reconnect",
+                role="recovery",
+                wrap=True,
+                gap="sm",
+            )
+        )
+    if state.switching:
+        dock.append(
+            ui.text("Opening session · submitted messages are held for it", key="switching", role="activity")
+        )
+    if state.queue_paused and state.queued:
+        dock.append(
+            ui.row(
+                ui.text("Queue paused", tone="muted", key="label"),
+                button("Continue queue", lambda: action("continue-queue"), key="continue"),
+                button("Discard queue", lambda: action("discard-queue"), key="discard"),
+                key="queue-actions",
+                role="queue-actions",
+                wrap=True,
+                gap="sm",
+            )
+        )
+    if state.search_query:
+        index = state.search_index % len(found) + 1 if found else 0
+        dock.append(
+            ui.col(
+                ui.text(f"Find “{state.search_query}” · {index}/{len(found)} matches", key="query"),
+                ui.text(
+                    searchable(selected)[:240] if selected else "No matches in the loaded conversation.",
+                    tone="muted",
+                    key="preview",
+                ),
+                ui.row(
+                    button("Previous", lambda: action("find-previous"), key="previous"),
+                    button("Next", lambda: action("find-next"), key="next"),
+                    button("Close search", lambda: action("find-close"), key="close"),
+                    key="actions",
+                    wrap=True,
+                    gap="sm",
+                ),
+                key="search",
+                role="transcript-search",
+            )
+        )
     if state.failed:
         dock.append(ui.text(state.activity, tone="error", role="activity", key="working"))
     elif state.busy or not state.ready:
@@ -1207,7 +1285,10 @@ def view(
             else "What would you like to work on?",
             # Not readonly on failure: /doctor and /quit must still be typeable.
             readonly=False,
-            sendable=state.ready and (not state.busy or bool(clarification)),
+            sendable=state.ready
+            and not state.failed
+            and not state.switching
+            and (not state.busy or bool(clarification)),
             max_lines=8,
             prompt=[ui.span("❯ ", "accent")],
         )
@@ -1216,19 +1297,23 @@ def view(
         bool(active_draft.text.strip())
         and state.ready
         and not state.failed
+        and not state.switching
         and (not state.busy or bool(clarification))
     )
     if state.busy and not clarification:
-        action = ui.seg("esc stop", side="right", role="stop", key="action", on_click=lambda _: stop())
+        send_action = ui.seg(
+            "esc stop", side="right", role="stop", key="action", priority=100, on_click=lambda _: stop()
+        )
         queueable = bool(active_draft.text.strip()) and state.ready and not state.failed
     else:
         queueable = False
         send = submit or (lambda: None)
-        action = ui.seg(
+        send_action = ui.seg(
             "⏎ answer" if clarification else "⏎ send",
             side="right",
             role="send" if can_send else "send-off",
             key="action",
+            priority=100,
             on_click=(lambda _: send()) if can_send else None,
         )
     if queueable:
@@ -1285,7 +1370,7 @@ def view(
             else None,
             ui.seg("⇧⏎ newline", side="right", key="newline", priority=1),
             # the send or stop key is the one thing the strip may never give up
-            action,
+            send_action,
             role="bar",
             key="bar",
         )
@@ -1301,6 +1386,9 @@ def view(
                     key="earlier",
                 )
                 if hidden
+                else None,
+                ui.text(f"… {later} later turns · /find-close returns to latest", key="later", role="earlier")
+                if later
                 else None,
                 *(
                     ui.col(

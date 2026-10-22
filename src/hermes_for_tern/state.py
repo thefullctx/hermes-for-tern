@@ -13,6 +13,7 @@ from typing import Any
 DRAIN = 0.35
 MIN_RATE = 120.0
 # Newly revealed text is written in gold ink that dries: each FADE age ends one stage.
+# Timers compare absolute deadlines; subtracting timestamps can round an exact boundary backwards.
 FADE = (0.12, 0.32, 0.6)
 # A finished thought stays readable, then fades; after FOLD seconds it folds to one line.
 FOLD = 5.5
@@ -26,7 +27,7 @@ MUSING = 4.0
 # Seconds a dispatch stays; the last LEAVE of them it fades out.
 DISPATCH = 6.0
 LEAVE = 0.6
-# How many follow-ups can be held while a turn runs; past this the oldest is dropped.
+# How many follow-ups can be held; overflow stays in the composer.
 QUEUE = 8
 
 
@@ -106,7 +107,7 @@ class Row:
     folded_out: bool = False  # the fold-away frame after folding expires has rendered
 
     def folding(self, now: float) -> bool:
-        return self.ended is not None and now - self.ended < FOLD
+        return self.ended is not None and now < self.ended + FOLD
 
     @property
     def visible(self) -> str:
@@ -129,21 +130,21 @@ class Row:
             self.reveals.append((float("-inf"), self.shown))
         self.shown = min(len(self.text), self.shown + count)
         self.reveals.append((now, self.shown))
-        while len(self.reveals) > 1 and now - self.reveals[1][0] > FADE[-1]:
+        while len(self.reveals) > 1 and now > self.reveals[1][0] + FADE[-1]:
             self.reveals.popleft()
 
     def fading(self, now: float) -> bool:
-        return bool(self.reveals) and now - self.reveals[-1][0] < FADE[-1]
+        return bool(self.reveals) and now < self.reveals[-1][0] + FADE[-1]
 
     def fresh(self, now: float) -> tuple[str, ...]:
         """The text revealed within each FADE stage, the driest first and the newest last."""
         if self.shown is None or not self.fading(now):
             return ("",) * len(FADE)
 
-        def shown_at(moment: float) -> int:
-            return ([count for at, count in self.reveals if at <= moment] or [self.reveals[0][1]])[-1]
+        def shown_at(age: float) -> int:
+            return ([count for at, count in self.reveals if at + age <= now] or [self.reveals[0][1]])[-1]
 
-        bounds = [shown_at(now - age) for age in reversed(FADE)] + [self.shown]
+        bounds = [shown_at(age) for age in reversed(FADE)] + [self.shown]
         return tuple(self.text[a:b] for a, b in zip(bounds, bounds[1:]))
 
 
@@ -214,10 +215,10 @@ class Dispatch:
     born: float = 0.0
 
     def leaving(self, now: float) -> bool:
-        return self.ttl is not None and now - self.born > self.ttl - LEAVE
+        return self.ttl is not None and now > self.born + (self.ttl - LEAVE)
 
     def gone(self, now: float) -> bool:
-        return self.ttl is not None and now - self.born > self.ttl
+        return self.ttl is not None and now > self.born + self.ttl
 
 
 @dataclass
@@ -287,6 +288,13 @@ class Conversation:
         self.busy = False
         self.ready = False
         self.failed = False
+        self.connection = "connecting"
+        self.switching = False
+        self.queue_paused = False
+        self.recovery_available = False
+        self.recovery_label = ""
+        self.search_query = ""
+        self.search_index = 0
         self.activity = "Connecting to Hermes"
         self.usage: dict = {}
         self._counter = 0
@@ -367,13 +375,14 @@ class Conversation:
         self.heard = self.turn_started
         self.touch()
 
-    def queue(self, text: str) -> None:
+    def queue(self, text: str) -> bool:
         """Hold a follow-up to send the moment the turn ends: you think of it while Hermes works."""
         text = text.strip()
-        if text:
-            self.queued.append(text)
-            del self.queued[:-QUEUE]
-            self.touch()
+        if not text or len(self.queued) >= QUEUE:
+            return False
+        self.queued.append(text)
+        self.touch()
+        return True
 
     def take_queued(self) -> str | None:
         return self.queued.pop(0) if self.queued else None
@@ -431,11 +440,11 @@ class Conversation:
         """Reveal streamed text smoothly, however bursty its arrival."""
         dt = min(0.1, max(0.0, now - self._paced_at))
         self._paced_at = now
-        if self.exit_armed is not None and now - self.exit_armed >= EXIT_WINDOW:
+        if self.exit_armed is not None and now >= self.exit_armed + EXIT_WINDOW:
             self.exit_armed = None
             self.touch()
         musing = (
-            self.busy and self.activity == "Thinking" and not self.questions and now - self.heard >= MUSING
+            self.busy and self.activity == "Thinking" and not self.questions and now >= self.heard + MUSING
         )
         if musing != self.musing:
             self.musing = musing
@@ -652,6 +661,8 @@ class Conversation:
                     "error",
                     away=True,
                 )
+            if status != "complete" or failed:
+                self.queue_paused = True
             self.busy = False
             self.activity = "Ready"
             self._assistant = None
@@ -861,6 +872,14 @@ class Conversation:
         self.clear()
         self.questions.clear()
         self.queued.clear()
+        self.search_query = ""
+        self.search_index = 0
+        self.watch = None
+        self.models = {}
+        self.info = {}
+        self.effort = "off"
+        self._quiet.clear()
+        self._todo_revision = -1
         self.title = ""
         self.last_prompt = ""
         self.resumed = False

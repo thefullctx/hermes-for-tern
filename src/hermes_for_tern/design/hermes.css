@@ -4,7 +4,8 @@
    1040px measure. Gold is Hermes. Program sheets reach only this surface's regions. */
 [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
 [data-role='activity'], [data-role='fuel'], [data-role='dispatches'], [data-role='slash-list'],
-[data-role='exit-hint'] {
+[data-role='exit-hint'], [data-role='recovery'], [data-role='queue-actions'],
+[data-role='transcript-search'] {
   --hft-gold: light-dark(#805c20, #d5b475);
   --hft-gold-wash: light-dark(#805c2012, #d5b47512);
   --hft-gold-line: light-dark(#805c2040, #d5b47540);
@@ -167,6 +168,14 @@
 .sf.sf-row[data-role='queued-line'] [data-role='queued'] {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sf.sf-row[data-role='queued-line'] .sf-text[data-role='depth'] { flex: 0 0 auto; }
+
+/* Recovery and search share the composer's measure and existing button vocabulary. */
+.sf:is([data-role='recovery'], [data-role='queue-actions'], [data-role='transcript-search']) {
+  box-sizing: border-box; width: 100%; max-width: 1040px; margin: 0 auto 6px; padding: 4px 16px;
+  font-family: var(--hft-mono); font-size: 12px; color: var(--hft-muted); }
+.sf.sf-row:is([data-role='recovery'], [data-role='queue-actions']) { align-items: center; flex-wrap: wrap; }
+.sf.sf-col[data-role='transcript-search'] { gap: 6px; }
+[data-role='transcript-search'] .sf-text { overflow-wrap: anywhere; }
 
 /* ---------- a clipped tool body says so, in the tree's own voice */
 .sf.sf-col[data-role='clipped'] { gap: 0; }
@@ -492,7 +501,8 @@
 
 @media (prefers-contrast: more) {
   [data-role='canvas'], [data-role='stage'], [data-role='composer'], [data-role='bar'],
-  [data-role='activity'], [data-role='slash-list'] { --hft-ink: var(--t1); --hft-muted: var(--t2); --hft-faint: var(--t3); --hft-line: var(--l3); }
+  [data-role='activity'], [data-role='slash-list'], [data-role='recovery'],
+  [data-role='queue-actions'], [data-role='transcript-search'] { --hft-ink: var(--t1); --hft-muted: var(--t2); --hft-faint: var(--t3); --hft-line: var(--l3); }
 }
 @media (max-width: 600px) {
   .sf.sf-col[data-role='canvas'] { padding: 12px 10px 16px calc(10px + var(--hft-gut)); }

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import queue
+import os
 import shlex
 import time
+import threading
 from concurrent.futures import Future
 from pathlib import Path
 
-import tern_sdk
 from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent, VisibleEvent
 
 from .editor import Draft
+from .recovery import RecoveryStore
+from .transcript import markdown, matches
 from .rpc import Backend
 from .state import SECRET_METHODS, TAIL, Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
@@ -63,11 +66,25 @@ class App:
         self.completing: Future | None = None
         self.typed = ""  # the draft the command list's cursor was placed for
         self.switching: str | None = None  # the session `/resume` is picking up in this pane
+        self.held_switch: list[str] = []
+        self.request_sessions: dict[Future, str] = {}
+        self.recovering = False
+        self.recovery_error = False
+        self.restoring: dict | None = None
+        self.store: RecoveryStore | None = None
+        self.saved_records: list[dict] = []
+        self._saved_at = 0.0
+        self._save_failed = False
+        self._retired: list[threading.Thread] = []
+        self.gateway: dict = {}
+        self.uncertain_work = False
 
     def request(self, method: str, params: dict | None = None) -> Future:
         assert self.backend
         future = self.backend.request(method, params)
         self.pending.append((method, future, time.monotonic() + 60))
+        if params and params.get("session_id") and method not in ("session.resume", "session.close"):
+            self.request_sessions[future] = params["session_id"]
         return future
 
     def scoped(self, **params) -> dict:
@@ -85,7 +102,14 @@ class App:
             self.render()
             surface.focus("dock.composer")
             try:
-                self.backend = Backend(self.command, self.cwd)
+                if self.demo_duration is None:
+                    self.store = RecoveryStore(self.cwd, self.options.get("profile"))
+                    self.saved_records = self.store.records()
+                    self.update_saved()
+                try:
+                    self.backend = Backend(self.command, self.cwd)
+                except (OSError, RuntimeError) as exc:
+                    self.fail(str(exc))
                 last_render = 0.0
                 revision = -1
                 while not self.exit and not self.session.closed and not surface.closed:
@@ -104,6 +128,7 @@ class App:
                     if self.state.watch and now - self.watched_at >= TAIL:
                         self.read_tail()
                     self.state.pace(now)
+                    self.save_drafts()
                     if self.state.revision != revision and now - last_render >= 0.033:
                         self.render()
                         revision = self.state.revision
@@ -113,12 +138,20 @@ class App:
                 self.render()
                 # Keep a failed launch readable; allow the user to leave normally.
                 while not self.exit and not self.session.closed and not surface.closed:
+                    self.read_backend()
+                    self.check_requests()
+                    self.state.pace(time.monotonic())
+                    self.save_drafts()
+                    self.render()
                     item = self.session.poll(0.1)
                     if item is not None:
                         self.input(item)
             finally:
+                self.save_drafts(force=True)
                 if self.backend:
                     self.backend.close(self.state.session_id)
+                for worker in self._retired:
+                    worker.join(timeout=10)
         # The surface is gone; the pane's own terminal keeps this in its scrollback.
         hint = self.resume_hint()
         if hint:
@@ -148,6 +181,7 @@ class App:
                 self.state.unqueue,
                 self.pick_command,
                 self.resume_session,
+                self.local_action,
             )
         )
         if self.backend:
@@ -160,12 +194,201 @@ class App:
             self._ack_approvals.clear()
 
     def fail(self, message: str) -> None:
+        if self.state.failed:
+            return
         self.state.add("error", message)
         self.state.failed = True
         self.state.ready = False
+        self.state.connection = "disconnected"
+        self.state.queue_paused = True
+        self.state.questions.clear()
+        self.state.close_watch()
+        self._ack_approvals.clear()
+        self.secret = Draft()
+        self.answer_draft = Draft()
+        for tool in self.state.tools.values():
+            if tool.status == "running":
+                tool.status = "cancelled"
+        for agent in self.state.agents.values():
+            if agent.status in ("running", "pending"):
+                agent.status = "aborted"
+        if self.state.busy:
+            self.uncertain_work = True
+            self.state.add(
+                "notice", "Work was interrupted. It may already have changed files; it will not be resent."
+            )
         self.state.busy = False
-        self.state.activity = "Disconnected"
+        self.state.activity = "Disconnected — reconnect to resume"
+        self.recovering = False
+        if self.switching:
+            self.switch_failed()
+        self.switching = None
+        self.state.switching = False
         self.state.touch()
+        self.save_drafts(force=True)
+
+    def update_saved(self) -> None:
+        self.state.recovery_available = bool(self.saved_records)
+        record = self.saved_records[0] if self.saved_records else {}
+        self.state.recovery_label = str(record.get("session") or "a session that did not finish starting")
+        self.state.touch()
+
+    def save_drafts(self, *, force: bool = False) -> None:
+        if not self.store or (not force and time.monotonic() - self._saved_at < 0.5):
+            return
+        self._saved_at = time.monotonic()
+        try:
+            self.store.save(
+                self.draft.text,
+                self.state.queued + self.held_switch,
+                self.switching or self.state.stored_session_id,
+                self.state.busy or self.uncertain_work,
+            )
+            self._save_failed = False
+        except OSError:
+            if not self._save_failed:
+                self.state.add(
+                    "notice", "Draft recovery could not be saved. Keep this pane open to retain your text."
+                )
+                self._save_failed = True
+
+    def reconnect(self, *, fresh: bool = False) -> None:
+        if self.state.connection in ("connecting", "recovering") and not self.state.failed:
+            return
+        if not fresh and not self.state.stored_session_id and self.state.rows:
+            self.state.add(
+                "notice", "There is no stored session to resume. Choose Start new session to keep your draft."
+            )
+            self.recovery_error = True
+            return
+        self.resume = None if fresh else self.state.stored_session_id
+        self.recovering = not fresh
+        self.recovery_error = False
+        self.state.failed = False
+        self.state.ready = False
+        self.state.questions.clear()
+        self.secret = Draft()
+        self.answer_draft = Draft()
+        self.state.connection = "recovering" if self.recovering else "connecting"
+        self.state.activity = "Reconnecting to Hermes"
+        self.state.queue_paused = True
+        self.state.session_id = None
+        if fresh:
+            self.uncertain_work = False
+            queued = list(self.state.queued)
+            self.state.switched()
+            self.state.queued = queued
+            self.state.stored_session_id = None
+        self.pending.clear()
+        self.request_sessions.clear()
+        self.asked.clear()
+        self.completing = None
+        self.gateway = {}
+        self.start_deadline = time.monotonic() + 60
+        if self.backend:
+            worker = threading.Thread(target=self.backend.close, daemon=True)
+            worker.start()
+            self._retired.append(worker)
+        try:
+            self.backend = Backend(self.command, self.cwd)
+        except (OSError, RuntimeError) as exc:
+            self.fail(str(exc))
+        self.state.touch()
+
+    def restore_drafts(self) -> None:
+        if not self.saved_records or self.restoring:
+            return
+        if not self.state.ready and not self.state.failed:
+            self.state.add("notice", "Wait for Hermes to finish connecting before restoring saved text.")
+            return
+        if self.state.busy or self.switching or self.draft.text or self.state.queued:
+            self.state.add(
+                "notice",
+                "Finish this turn and send or clear your current draft and queue before restoring saved text.",
+            )
+            return
+        self.restoring = self.saved_records[0]
+        target = self.restoring.get("session")
+        if target and target != self.state.stored_session_id:
+            if self.state.ready:
+                self.resume_session(target)
+            else:
+                self.state.stored_session_id = target
+                self.reconnect()
+        else:
+            self.apply_restored()
+
+    def apply_restored(self) -> None:
+        record = self.restoring
+        if not record:
+            return
+        self.draft = Draft(record["draft"], len(record["draft"]))
+        self.state.queued = list(record["queue"])
+        self.state.queue_paused = True
+        # Write our replacement before removing the original recovery file.
+        self.save_drafts(force=True)
+        if self.store and not self._save_failed:
+            try:
+                self.store.forget(record)
+                self.saved_records.remove(record)
+            except OSError:
+                self.state.add("notice", "Text restored, but its old recovery file could not be removed.")
+        self.restoring = None
+        self.update_saved()
+        self.state.add(
+            "notice",
+            "Saved text restored; nothing was sent. Queued messages are paused. Previously submitted work may already have run.",
+        )
+
+    def continue_queue(self) -> None:
+        if not self.state.ready or self.state.failed or self.switching or self.state.busy:
+            return
+        self.state.queue_paused = False
+        self.send_queued()
+        self.state.touch()
+
+    def send_queued(self) -> None:
+        if (
+            self.state.queued
+            and not self.state.queue_paused
+            and not self.switching
+            and self.state.ready
+            and not self.state.failed
+        ):
+            text = self.state.take_queued()
+            self.state.begin(text)
+            self.request("prompt.submit", self.scoped(text=text))
+
+    def local_action(self, action: str) -> None:
+        if action == "reconnect":
+            self.reconnect()
+        elif action == "new-session":
+            self.reconnect(fresh=True)
+        elif action == "restore":
+            self.restore_drafts()
+        elif action == "forget-saved" and self.saved_records and self.store:
+            try:
+                self.store.forget(self.saved_records.pop(0))
+                self.update_saved()
+            except OSError:
+                self.state.add("notice", "Could not remove the saved draft.")
+        elif action == "continue-queue":
+            self.continue_queue()
+        elif action == "discard-queue":
+            self.state.queued.clear()
+            self.state.touch()
+        elif action in ("find-next", "find-previous"):
+            found = matches(self.state)
+            if found:
+                self.state.search_index = (
+                    self.state.search_index + (1 if action == "find-next" else -1)
+                ) % len(found)
+                found[self.state.search_index].collapsed = False
+                self.state.touch()
+        elif action == "find-close":
+            self.state.search_query = ""
+            self.state.touch()
+        self.save_drafts(force=True)
 
     def read_backend(self) -> None:
         if not self.backend:
@@ -180,6 +403,8 @@ class App:
                 self.fail(frame["local_error"])
             elif frame.get("method") == "event":
                 params = frame.get("params", {})
+                if self.state.failed:
+                    continue
                 if (
                     params.get("session_id")
                     and self.state.session_id
@@ -188,31 +413,46 @@ class App:
                     continue
                 kind = params.get("type", "")
                 if kind == "gateway.ready":
+                    self.gateway = params.get("payload") or {}
                     self.request("client.capabilities", {"server_requests": True})
                 else:
                     old_question = self.state.clarify()
+                    old_secret = self.state.secret()
                     busy = self.state.busy
                     self.state.event(kind, params.get("payload") or {})
                     if old_question and old_question is not self.state.clarify():
                         self.answer_draft = Draft()
-                    if busy and not self.state.busy and self.state.queued:
-                        held = self.state.take_queued()
-                        if held:
-                            self.submit(held)
-            elif "method" in frame and "id" in frame:
+                    if old_secret and old_secret is not self.state.secret():
+                        self.secret = Draft()
+                    if busy and not self.state.busy:
+                        self.send_queued()
+            elif "method" in frame and "id" in frame and not self.state.failed:
                 self.server_request(frame)
 
     def check_requests(self) -> None:
         batch, self.pending = self.pending, []
         remaining = []
         for method, future, deadline in batch:
+            scope = self.request_sessions.get(future)
+            if scope and scope != self.state.session_id:
+                self.request_sessions.pop(future, None)
+                self.asked.pop(future, None)
+                continue
+            if self.state.failed and method != "local.doctor":
+                self.request_sessions.pop(future, None)
+                self.asked.pop(future, None)
+                continue
             if not future.done():
                 if time.monotonic() > deadline:
+                    self.request_sessions.pop(future, None)
+                    self.asked.pop(future, None)
+                    if self.backend and hasattr(self.backend, "forget"):
+                        self.backend.forget(future)
                     if method == "complete.slash":
                         self.asked.pop(future, None)  # the list keeps this pane's own commands
                     elif method == "session.resume" and self.switching:
                         self.state.add("notice", f"Hermes did not pick up {self.switching!r} in time.")
-                        self.switching = None
+                        self.switch_failed()
                     elif method in ("session.resume", "session.most_recent"):
                         self.start_fresh(f"Hermes did not find {self.resume!r} in time")
                     elif method in ("session.create", "client.capabilities"):
@@ -224,6 +464,7 @@ class App:
                     continue
                 remaining.append((method, future, deadline))
                 continue
+            self.request_sessions.pop(future, None)
             try:
                 result = future.result()
                 if method == "client.capabilities":
@@ -241,15 +482,45 @@ class App:
                     else:
                         self.start_fresh("There is no earlier session to continue")
                 elif method == "session.resume":
+                    if not isinstance(result, dict) or not isinstance(result.get("session_id"), str):
+                        raise ValueError("Hermes returned an invalid session; no messages were sent.")
                     previous = self.state.session_id if self.switching else None
-                    if previous:
+                    held = list(self.held_switch)
+                    self.held_switch.clear()
+                    recovering = self.recovering
+                    if previous or recovering:
+                        queued = list(self.state.queued) if recovering else []
                         self.state.switched()
+                        self.state.queued = queued
                         self.state.close_sheet()
                     self.switching = None
-                    self.session_ready(result, stored=result.get("session_key") or result.get("resumed"))
+                    self.state.switching = False
+                    self.secret = Draft()
+                    self.answer_draft = Draft()
+                    self.session_ready(
+                        result,
+                        stored=result.get("session_key")
+                        or result.get("stored_session_id")
+                        or result.get("resumed"),
+                    )
                     self.state.restore(result.get("messages") or [], result.get("info") or {})
+                    if recovering:
+                        self.uncertain_work = False
+                        self.state.queue_paused = True
+                        self.state.add(
+                            "notice",
+                            "Reconnected. Previous work may already have run; no prompt was resent. Review paused messages before continuing.",
+                        )
+                    self.recovering = False
                     if previous and previous != self.state.session_id:
                         self.request("session.close", {"session_id": previous})
+                    if self.restoring:
+                        self.apply_restored()
+                    for text in held:
+                        self.state.queue(text)
+                    if held:
+                        self.continue_queue()
+                    self.save_drafts(force=True)
                 elif method == "session.list":
                     self.state.listed(result.get("sessions") or [])
                 elif method == "session.create":
@@ -258,6 +529,9 @@ class App:
                         self.request("session.list", self.profiled(limit=SESSIONS))
                     if self.demo_duration is not None:
                         self.submit(f"Run a {self.demo_duration:g}-second simulated visual demo.")
+                elif method == "local.doctor":
+                    for line in result:
+                        self.state.add("notice", line)
                 elif method == "session.interrupt":
                     self.state.activity = "Stopping" if self.state.busy else "Ready"
                     self.state.touch()
@@ -290,7 +564,7 @@ class App:
                     self.state.add("notice", f"{command.split(' ')[0]}: {exc}")
                 elif method == "session.resume" and self.switching:
                     self.state.add("notice", f"Could not resume {self.switching!r}: {exc}")
-                    self.switching = None
+                    self.switch_failed()
                 elif method in ("session.resume", "session.most_recent"):
                     self.start_fresh(f"Could not resume {self.resume!r}: {exc}")
                 elif method in ("session.list", "session.close"):
@@ -300,6 +574,7 @@ class App:
                 else:
                     self.state.add("error", str(exc))
                     if method == "prompt.submit":
+                        self.state.queue_paused = True
                         self.state.busy = False
                         self.state.activity = "Ready"
         # Requests scheduled by the handlers above must survive this iteration.
@@ -326,16 +601,25 @@ class App:
         self.request("session.create", params)
 
     def start_fresh(self, why: str) -> None:
-        """A resume that could not happen starts a new session instead of leaving the pane dead."""
+        """Initial CLI resume may fall back; recovery must never silently change sessions."""
+        if self.recovering or self.restoring:
+            self.fail(f"{why}. Retry recovery or explicitly start a new session; your text is retained.")
+            self.recovery_error = True
+            self.restoring = None
+            return
         self.state.add("notice", f"{why}. This is a new session.")
         self.resume = None
         self.create_session()
 
     def session_ready(self, result: dict, *, stored: str | None) -> None:
+        if not isinstance(result.get("session_id"), str) or not result["session_id"]:
+            raise ValueError("Hermes returned an invalid session id.")
         self.state.session_id = result["session_id"]
-        self.state.stored_session_id = stored
+        self.state.stored_session_id = stored if isinstance(stored, str) else None
         self.state.info.update(result.get("info") or {})
         self.state.ready = True
+        self.state.failed = False
+        self.state.connection = "ready"
         self.state.activity = "Ready"
         self.state.touch()
 
@@ -346,10 +630,13 @@ class App:
         if not stored or not (self.state.last_prompt or self.state.resumed):
             return ""
         profile = self.options.get("profile")
-        flag = f" -p {profile}" if profile and profile not in ("default", "custom") else ""
-        lines = ["Resume this session with:", f"  hermes --resume {stored}{flag}"]
+        flag = f" -p {shlex.quote(profile)}" if profile and profile not in ("default", "custom") else ""
+        lines = ["Resume this session with:", f"  hermes --resume {shlex.quote(stored)}{flag}"]
         if self.state.title:
-            lines.append(f'  hermes -c "{self.state.title}"{flag}')
+            title = self.state.title
+            # Preserve the familiar quoted hint for ordinary titles, escape shell expansion.
+            escaped = title.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+            lines.append(f'  hermes -c "{escaped}"{flag}')
         return "\n".join(lines)
 
     def server_request(self, frame: dict) -> None:
@@ -427,19 +714,25 @@ class App:
         self.state.touch()
 
     def stop(self) -> None:
-        if self.state.busy and self.state.session_id:
+        self.state.queue_paused = True
+        self.state.touch()
+        if self.state.busy and self.state.session_id and not self.state.failed:
             self.request("session.interrupt", self.scoped())
             self.state.activity = "Stopping"
             self.state.touch()
 
     def cycle_effort(self) -> None:
         """The ring was pressed: ask Hermes to think a little deeper, or not, from now on."""
+        if self.state.failed or self.switching:
+            return
         level = self.state.cycle_effort()
         if self.state.session_id:
             self.request("config.set", self.scoped(key="reasoning", value=hermes_effort(level)))
 
     def watch_event(self, action: str) -> None:
         """The watched child's own buttons: interrupt it, steer it, or stop watching."""
+        if self.state.failed or self.switching:
+            return
         if action == "interrupt":
             self.interrupt_agent()
         elif action == "steer":
@@ -450,6 +743,8 @@ class App:
     def model_event(self, action: str, value: str = "") -> None:
         """The model sheet's own events: `open` from the model segment, `pick` from a row,
         `confirm` from its switch key, `cancel` from its cancel key or the backdrop."""
+        if self.state.failed or self.switching:
+            return
         if action == "open":
             if self.state.session_id:
                 self.request("model.options", self.scoped(refresh=True))
@@ -469,6 +764,8 @@ class App:
         """The model sheet owns the keyboard while it is open: type to filter, arrows to move the
         cursor, Enter to switch, Escape to put it away. True when the key was the sheet's."""
         sheet = self.state.sheet
+        if self.state.secret() or self.state.clarify():
+            return False
         if sheet is None or item.ctrl or item.alt or item.meta:
             return False
         if item.name == "escape":
@@ -509,6 +806,8 @@ class App:
     def switch_model(self, value: str, *, confirmed: bool = False) -> None:
         """Ask Hermes to run another model. Mid-turn it holds the pick for the next turn start and
         reports it in session.info; an expensive model asks first, which is what `confirmed` is."""
+        if self.state.failed or self.switching:
+            return
         if not value or not self.state.session_id:
             return
         if self.state.sheet:
@@ -614,6 +913,9 @@ class App:
             slash_typed(text) is None
             or not self.backend
             or not self.state.session_id
+            or not self.state.ready
+            or self.state.failed
+            or self.switching
             or text in self.asked.values()
             or self.state.slash.answered == text
         ):
@@ -627,6 +929,8 @@ class App:
         """The watched child owns the keyboard while it is open: a line to steer it, Enter to
         send, Escape to stop watching. True when the key was the watch's."""
         watch = self.state.watch
+        if self.state.secret() or self.state.clarify():
+            return False
         if watch is None or item.ctrl or item.alt or item.meta:
             return False
         if item.name == "escape":
@@ -680,7 +984,7 @@ class App:
 
     def retry(self) -> None:
         """Send the last prompt again after a retryable failure."""
-        if self.state.can_retry:
+        if self.state.can_retry and not self.switching:
             prompt = self.state.last_prompt
             self.state.begin(prompt)
             self.request("prompt.submit", self.scoped(text=prompt))
@@ -703,27 +1007,67 @@ class App:
                 self.retry()
             return
         if text.strip().startswith("/"):
+            # Consume the command first: /recover may replace it with a restored draft.
+            self.draft = Draft()
             self.run_command(text.strip())
-            if text.strip() != "/stop":
-                self.draft = Draft()
+            self.save_drafts(force=True)
             return
         if not self.state.ready or self.state.failed:
             return
-        if self.state.busy:
-            # Hermes is still working; hold the thought rather than dropping it on the floor.
-            self.state.queue(text)
-            self.draft = Draft()
+        if self.switching:
+            if len(self.held_switch) >= 8:
+                self.state.add("notice", "The switch queue is full. Your message stays in the composer.")
+                self.draft = Draft(text, len(text))
+            else:
+                self.held_switch.append(text)
+                self.draft = Draft()
+                self.state.add("notice", "Message held for the session being opened.")
+            self.save_drafts(force=True)
+            return
+        if self.state.busy or (self.state.queue_paused and self.state.queued):
+            if self.state.queue(text):
+                self.draft = Draft()
+            else:
+                self.state.add(
+                    "notice",
+                    "The queue is full (8 messages). Remove a queued message or keep editing this draft.",
+                )
+                self.draft = Draft(text, len(text))
+            self.save_drafts(force=True)
             return
         self.state.begin(text)
         self.draft = Draft()
         self.request("prompt.submit", self.scoped(text=text))
+        self.save_drafts(force=True)
 
     def run_command(self, text: str) -> None:
         """One of COMMANDS, answered here; every other `/command` is Hermes's to run."""
         name, space, rest = text.partition(" ")
         if ALIASES.get(name.lower()):
             text = ALIASES[name.lower()] + space + rest
-        if text in ("/quit", "/exit"):
+        local = {
+            "/reconnect": "reconnect",
+            "/recover": "restore",
+            "/queue-continue": "continue-queue",
+            "/queue-discard": "discard-queue",
+            "/find-next": "find-next",
+            "/find-previous": "find-previous",
+            "/find-close": "find-close",
+        }
+        if text in local:
+            self.local_action(local[text])
+        elif name == "/find":
+            self.state.search_query = rest.strip()
+            self.state.search_index = 0
+            found = matches(self.state)
+            if found:
+                found[0].collapsed = False
+            self.state.touch()
+        elif name == "/export":
+            self.export_transcript(rest.strip())
+        elif self.switching and name not in ("/quit", "/exit", "/doctor", "/stop"):
+            self.state.add("notice", "Wait for the session switch before running this command.")
+        elif text in ("/quit", "/exit"):
             self.exit = True
         elif text == "/model":
             self.model_event("open")
@@ -777,7 +1121,16 @@ class App:
             self.state.close_sheet()
             self.state.add("notice", "This is the session you are in.")
             return
+        if self.state.queued:
+            self.state.add(
+                "notice", "Continue or discard the current session's queue before switching sessions."
+            )
+            self.restoring = None
+            return
         self.switching = target
+        self.state.switching = True
+        self.state.queue_paused = True
+        self.state.touch()
         self.request("session.resume", self.profiled(session_id=target, cols=self.cols))
 
     def hermes_command(self, text: str) -> None:
@@ -833,6 +1186,9 @@ class App:
     def send_command(self, message: str, shown: str) -> None:
         """Send what a command expanded to, showing the command as it was typed rather than the
         expansion, which is written for the model."""
+        if not self.state.ready or self.state.failed or self.switching:
+            self.state.add("notice", "Reconnect or finish switching sessions before sending this command.")
+            return
         if self.state.busy:
             self.state.add("notice", f"{shown.split(' ')[0]} can run when this turn ends.")
             return
@@ -840,25 +1196,62 @@ class App:
         self.state.last_prompt = message
         self.request("prompt.submit", self.scoped(text=message))
 
-    def doctor(self) -> None:
-        """What `--doctor` prints on the terminal, said here so it is never a dead end."""
-        from . import launcher
+    def switch_failed(self) -> None:
+        self.switching = None
+        self.state.switching = False
+        self.state.queue_paused = True
+        if self.held_switch:
+            # Retain destination-bound messages separately: never send them to the old session.
+            self.state.add(
+                "notice", "Session switch failed. Held messages were kept in your draft; none were sent."
+            )
+            text = "\n\n".join(self.held_switch + ([self.draft.text] if self.draft.text else []))
+            self.draft = Draft(text, len(text))
+            self.held_switch.clear()
+        self.restoring = None
+        self.state.touch()
+        self.save_drafts(force=True)
 
-        lines = []
+    def export_transcript(self, destination: str) -> None:
+        path = Path(destination).expanduser() if destination else self.cwd / "hermes-conversation.md"
+        if not path.is_absolute():
+            path = self.cwd / path
         try:
-            config = launcher.settings()
-            original = launcher.original_command(config)
-            lines.append(("hermes", original))
-            lines.append(("backend", shlex.join(launcher.backend_command(original, config))))
-            lines.append(("wrapper", str(config.get("target", "not installed"))))
-        except (OSError, RuntimeError, ValueError) as exc:
-            lines.append(("launcher", str(exc)))
-        lines.append(("protocol", str(getattr(tern_sdk.wire, "VERSION", "?"))))
-        lines.append(("session", self.state.session_id or "none"))
-        lines.append(("project", str(self.cwd)))
-        lines.append(("state", f"ready={self.state.ready} busy={self.state.busy}"))
-        for name, value in lines:
-            self.state.add("notice", f"{name}: {value}")
+            # Exclusive creation prevents accidental overwrite, including through symlinks.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(markdown(self.state))
+            self.state.add("notice", f"Exported loaded conversation to {path}")
+        except OSError:
+            self.state.add(
+                "notice",
+                f"Could not export to {path}. Choose a new writable filename; existing files are never overwritten.",
+            )
+
+    def doctor(self) -> None:
+        from .diagnostics import diagnose
+
+        if any(method == "local.doctor" for method, _, _ in self.pending):
+            return
+        future = Future()
+
+        def check():
+            try:
+                future.set_result(diagnose(self.cwd, surface_caps=self.session.caps))
+            except Exception:
+                future.set_result(
+                    ["Doctor could not finish. Check the launcher settings and backend installation."]
+                )
+
+        worker = threading.Thread(target=check, daemon=True)
+        worker.start()
+        self._retired.append(worker)
+        self.pending.append(("local.doctor", future, time.monotonic() + 30))
+        self.state.add("notice", f"project: {self.cwd}")
+        self.state.add("notice", f"session: {self.state.session_id or 'none'}")
+        self.state.add(
+            "notice", "Checking launcher integrity and backend handshake (no agent session or prompt)."
+        )
 
     def choose_by_key(self, item) -> bool:
         """A pending question answers to the keyboard: digits pick, Enter takes the likely one,

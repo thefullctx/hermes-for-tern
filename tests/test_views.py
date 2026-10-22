@@ -705,7 +705,7 @@ def test_the_strip_says_which_segments_may_be_given_up():
     state.ready = True
     built = build(state)
     segs = {key: node.wire()["p"] for key, node in built.nodes().items() if ".bar." in key}
-    assert segs["dock.bar.action"].get("priority") is None  # the send or stop key may never be given up
+    assert segs["dock.bar.action"]["priority"] > segs["dock.bar.model"]["priority"]  # retain Send/Stop first
     assert segs["dock.bar.newline"]["priority"] == 1  # the hint goes first
     assert segs["dock.bar.model"]["priority"] == 6
     assert segs["dock.bar.project"]["priority"] == 5
@@ -733,11 +733,13 @@ def test_a_long_list_scrolls_with_the_cursor_and_says_how_many_there_are():
     state.slash.items = [
         {"text": f"cmd{i:02d}", "display": f"/cmd{i:02d}", "meta": "", "kind": "command"} for i in range(20)
     ]
-    state.slash.cursor = 25
+    from hermes_for_tern.views import slash_rows
+
+    state.slash.cursor = next(i for i, row in enumerate(slash_rows(state, "/")) if row["name"] == "/cmd14")
     nodes = build(state, Draft("/", 1)).nodes()
     rows = [key for key in nodes if key.startswith("dock.slash.row-") and key.count(".") == 2]
     assert len(rows) == 8 and rows[-1] == "dock.slash.row-/cmd14"
-    assert "of 31" in nodes["dock.slash.more"].wire()["p"]["text"]
+    assert f"of {len(slash_rows(state, '/'))}" in nodes["dock.slash.more"].wire()["p"]["text"]
 
 
 def test_the_welcome_fades_under_the_list_and_aliases_are_offered_once():
@@ -751,7 +753,10 @@ def test_the_welcome_fades_under_the_list_and_aliases_are_offered_once():
     ]
     nodes = build(state, Draft("/c", 2)).nodes()
     assert nodes["layer.stage"].wire()["p"]["class"] == "hft-welcome-stage hft-tucked"
-    assert "dock.slash.row-/compress" in nodes and "dock.slash.row-/compact" not in nodes
+    from hermes_for_tern.views import slash_rows
+
+    names = [row["name"] for row in slash_rows(state, "/c")]
+    assert "/compress" in names and "/compact" not in names
 
 
 def test_the_sheet_shows_its_search_field_and_groups_models_by_provider():

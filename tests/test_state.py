@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from hermes_for_tern.state import (
     EFFORTS,
     FOLD,
@@ -356,16 +360,23 @@ def test_background_completion_is_dispatched():
     )
 
 
-def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks():
+def test_hermes_muses_after_a_silence_while_thinking_and_stops_when_it_speaks(monkeypatch):
+    # Use an exactly representable origin: adding/subtracting the runner's real uptime
+    # can round the exact threshold just below MUSING on some machines.
+    now = 100.0
+    monkeypatch.setattr("hermes_for_tern.state.time.monotonic", lambda: now)
     state = Conversation()
     state.begin("hello")
     start = state.heard
-    state.pace(start + MUSING - 0.1)
+    now = start + MUSING - 0.1
+    state.pace(now)
     assert not state.musing
-    state.pace(start + MUSING)
+    now = start + MUSING
+    state.pace(now)
     assert state.musing
     state.event("message.start", {})
-    state.pace(start + MUSING + 0.1)
+    now += 0.1
+    state.pace(now)
     assert not state.musing
 
 
@@ -395,3 +406,52 @@ def test_the_ring_follows_the_level_hermes_reports_rather_than_the_one_asked_for
     state.effort = "high"
     state.event("session.info", {"model": "muse-spark-1.3"})
     assert state.effort == "high"
+
+
+def test_non_success_completion_pauses_queued_work_even_with_an_unfamiliar_status():
+    state = Conversation()
+    state.ready = True
+    state.begin("work")
+    state.queue("later")
+    state.event("message.complete", {"status": "cancelled"})
+    assert not state.busy and state.queue_paused
+    assert state.queued == ["later"]
+
+
+@pytest.mark.parametrize("origin", [0.0, 60.371208452, math.nextafter(2**19 - 4, math.inf), 2**30 + 0.1])
+def test_animation_deadlines_are_exact_across_clock_origins(origin, monkeypatch):
+    from hermes_for_tern.state import DISPATCH, EXIT_WINDOW, FADE, LEAVE, Dispatch, Row
+
+    monkeypatch.setattr("hermes_for_tern.state.time.monotonic", lambda: origin)
+    row = Row("thought", "thought", text="x", shown=0, ended=origin)
+    row.reveal(1, origin)
+    fold_deadline = origin + FOLD
+    assert row.folding(math.nextafter(fold_deadline, -math.inf))
+    assert not row.folding(fold_deadline)
+    fade_deadline = origin + FADE[-1]
+    assert row.fading(math.nextafter(fade_deadline, -math.inf))
+    assert not row.fading(fade_deadline)
+    assert row.fresh(fade_deadline) == ("", "", "")
+
+    state = Conversation()
+    state.begin("work")
+    musing_deadline = origin + MUSING
+    state.pace(math.nextafter(musing_deadline, -math.inf))
+    assert not state.musing
+    state.pace(musing_deadline)
+    assert state.musing
+    state = Conversation()
+    state.arm_exit(origin)
+    exit_deadline = origin + EXIT_WINDOW
+    state.pace(math.nextafter(exit_deadline, -math.inf))
+    assert state.exit_armed is not None
+    state.pace(exit_deadline)
+    assert state.exit_armed is None
+
+    note = Dispatch("notice", "text", born=origin)
+    leave_deadline = origin + (DISPATCH - LEAVE)
+    assert not note.leaving(leave_deadline)
+    assert note.leaving(math.nextafter(leave_deadline, math.inf))
+    gone_deadline = origin + DISPATCH
+    assert not note.gone(gone_deadline)
+    assert note.gone(math.nextafter(gone_deadline, math.inf))

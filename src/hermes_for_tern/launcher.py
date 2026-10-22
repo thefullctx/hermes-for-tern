@@ -25,7 +25,12 @@ def settings_path() -> Path:
 
 def settings() -> dict:
     path = settings_path()
-    return json.loads(path.read_text()) if path.exists() else {}
+    config = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(config, dict):
+        raise ValueError(
+            "Launcher settings must be a JSON object. Restore launcher.json or reinstall the wrapper."
+        )
+    return config
 
 
 def original_command(config: dict) -> str:
@@ -55,6 +60,28 @@ def backend_command(original: str, config: dict) -> list[str]:
     return [original, "--run-module", "tui_gateway.entry"]
 
 
+def launcher_body() -> str:
+    return "#!/bin/sh\n" + MARKER + "\nexec " + shlex.quote(sys.executable) + ' -m hermes_for_tern "$@"\n'
+
+
+def launcher_matches(path: Path) -> bool:
+    """Accept interpreter symlinks to this environment, while rejecting changed wrapper logic."""
+    try:
+        lines = path.read_text().splitlines()
+        if len(lines) != 3 or lines[:2] != ["#!/bin/sh", MARKER]:
+            return False
+        command = shlex.split(lines[2])
+        return (
+            len(command) == 5
+            and command[0] == "exec"
+            and Path(command[1]).absolute().parent == Path(sys.executable).absolute().parent
+            and Path(command[1]).samefile(sys.executable)
+            and command[2:] == ["-m", "hermes_for_tern", "$@"]
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def install(target: Path | None = None, backend: list[str] | None = None) -> None:
     config = settings()
     if config:
@@ -72,7 +99,7 @@ def install(target: Path | None = None, backend: list[str] | None = None) -> Non
         raise RuntimeError(f"Refusing to replace an unrelated file: {target}")
     replacing = target == original.absolute()
     fallback = str(backup if replacing else original.absolute())
-    body = "#!/bin/sh\n" + MARKER + "\nexec " + shlex.quote(sys.executable) + ' -m hermes_for_tern "$@"\n'
+    body = launcher_body()
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if replacing:
@@ -153,14 +180,14 @@ def main(argv: list[str] | None = None) -> int:
         if args == ["--uninstall"]:
             uninstall()
             return 0
+        if args == ["--doctor"]:
+            from .diagnostics import diagnose
+
+            lines = diagnose(Path.cwd())
+            print("\n".join(lines))
+            return 1 if any(line.startswith("FAIL") for line in lines) else 0
         config = settings()
         original = original_command(config)
-        if args == ["--doctor"]:
-            print("Original Hermes:", original)
-            print("Backend command:", shlex.join(backend_command(original, config)))
-            print("Tern SDK:", tern_sdk.wire.VERSION, "(protocol)")
-            print("Installed wrapper:", config.get("target", "not installed"))
-            return 0
         if args and args[0] == "--plain":
             return passthrough(original, args[1:])
         options = native_options(args)

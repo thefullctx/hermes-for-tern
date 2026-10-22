@@ -80,3 +80,22 @@ def test_visual_demo_defaults_to_five_minutes_and_never_falls_back_to_hermes(mon
     monkeypatch.setattr(launcher.tern_sdk, "connect", lambda **_: None)
     monkeypatch.setattr(launcher, "passthrough", lambda *_: pytest.fail("Demo must not run real Hermes"))
     assert launcher.main(["--demo"]) == 1
+
+
+def test_doctor_accepts_same_environment_interpreter_alias_but_not_another_environment(tmp_path, monkeypatch):
+    current = tmp_path / "current"
+    current.mkdir()
+    interpreter = current / "python"
+    interpreter.symlink_to(sys.executable)
+    alias = current / "python3"
+    alias.symlink_to(sys.executable)
+    target = tmp_path / "hermes"
+    monkeypatch.setattr(launcher.sys, "executable", str(interpreter))
+    target.write_text(launcher.launcher_body().replace(str(interpreter), str(alias)))
+    assert launcher.launcher_matches(target)
+    other = tmp_path / "other"
+    other.mkdir()
+    unrelated = other / "python"
+    unrelated.symlink_to(interpreter)
+    target.write_text(launcher.launcher_body().replace(str(interpreter), str(unrelated)))
+    assert not launcher.launcher_matches(target)
