@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from hermes_for_tern.state import (
     EFFORTS,
     FOLD,
@@ -412,3 +416,42 @@ def test_non_success_completion_pauses_queued_work_even_with_an_unfamiliar_statu
     state.event("message.complete", {"status": "cancelled"})
     assert not state.busy and state.queue_paused
     assert state.queued == ["later"]
+
+
+@pytest.mark.parametrize("origin", [0.0, 60.371208452, math.nextafter(2**19 - 4, math.inf), 2**30 + 0.1])
+def test_animation_deadlines_are_exact_across_clock_origins(origin, monkeypatch):
+    from hermes_for_tern.state import DISPATCH, EXIT_WINDOW, FADE, LEAVE, Dispatch, Row
+
+    monkeypatch.setattr("hermes_for_tern.state.time.monotonic", lambda: origin)
+    row = Row("thought", "thought", text="x", shown=0, ended=origin)
+    row.reveal(1, origin)
+    fold_deadline = origin + FOLD
+    assert row.folding(math.nextafter(fold_deadline, -math.inf))
+    assert not row.folding(fold_deadline)
+    fade_deadline = origin + FADE[-1]
+    assert row.fading(math.nextafter(fade_deadline, -math.inf))
+    assert not row.fading(fade_deadline)
+    assert row.fresh(fade_deadline) == ("", "", "")
+
+    state = Conversation()
+    state.begin("work")
+    musing_deadline = origin + MUSING
+    state.pace(math.nextafter(musing_deadline, -math.inf))
+    assert not state.musing
+    state.pace(musing_deadline)
+    assert state.musing
+    state = Conversation()
+    state.arm_exit(origin)
+    exit_deadline = origin + EXIT_WINDOW
+    state.pace(math.nextafter(exit_deadline, -math.inf))
+    assert state.exit_armed is not None
+    state.pace(exit_deadline)
+    assert state.exit_armed is None
+
+    note = Dispatch("notice", "text", born=origin)
+    leave_deadline = origin + (DISPATCH - LEAVE)
+    assert not note.leaving(leave_deadline)
+    assert note.leaving(math.nextafter(leave_deadline, math.inf))
+    gone_deadline = origin + DISPATCH
+    assert not note.gone(gone_deadline)
+    assert note.gone(math.nextafter(gone_deadline, math.inf))
