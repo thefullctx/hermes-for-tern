@@ -9,6 +9,7 @@ from typing import Callable
 
 from tern_sdk import ui
 
+from .messages import ImageRef
 from .editor import Draft, utf16_len
 from .transcript import matches, searchable
 from .state import SECRET_METHODS, Agent, Conversation, Dispatch, Question, Row
@@ -22,6 +23,8 @@ COMMAND_ROWS = (
     ("/model", "switch the model over Hermes's catalog; /model <name> skips the sheet"),
     ("/btw <question>", "ask beside the running turn"),
     ("/bg <task>", "hand Hermes a task on a fresh agent"),
+    ("/attach [path]", "attach a PNG or JPEG image to this draft"),
+    ("/paste-image", "attach a clipboard image to this draft"),
     ("/name <title>", "name this session"),
     ("/resume [session]", "pick up an earlier session, by its id or title or from the list"),
     ("/cost", "what this session has spent"),
@@ -375,6 +378,35 @@ def clipped_output(row: Row):
     )
 
 
+def attachment_strip(images: tuple[ImageRef, ...], assets: dict, action: Callable | None = None):
+    if not images:
+        return None
+    return ui.row(
+        *(
+            ui.col(
+                ui.image(assets["attachment:" + image.id], alt=image.name, w=96, h=72, key="preview")
+                if assets.get("attachment:" + image.id)
+                else ui.text("Preview unavailable", tone="muted", key="preview"),
+                ui.text(image.name[:40], key="name"),
+                ui.text(
+                    f"{image.width} × {image.height} · {image.size / 1024:.1f} KiB", tone="muted", key="size"
+                ),
+                button("Remove", lambda i=index: action(f"image-remove:{i}"), key="remove")
+                if action
+                else None,
+                key=f"image-{index}",
+                role="attachment",
+                gap="sm",
+            )
+            for index, image in enumerate(images)
+        ),
+        key="attachments",
+        role="attachments",
+        wrap=True,
+        gap="sm",
+    )
+
+
 def transcript_row(
     row: Row,
     state: Conversation,
@@ -431,7 +463,13 @@ def transcript_row(
             on_toggle=lambda e: fold(row, state, e.collapsed),
         )
     if row.kind == "user":
-        return ui.card(ui.text(row.text, key="body"), variant="bare", role="message-user", key=row.key)
+        return ui.card(
+            ui.text(row.text, key="body"),
+            attachment_strip(row.images, assets or {}),
+            variant="bare",
+            role="message-user",
+            key=row.key,
+        )
     if row.kind == "assistant":
         live = (state.busy and row is state._assistant) or row.pending
         return ui.card(
@@ -1095,6 +1133,7 @@ def view(
     commands: Callable | None = None,
     resume: Callable | None = None,
     action: Callable | None = None,
+    image_path: Draft | None = None,
 ) -> dict:
     assets = assets or {}
     action = action or (lambda _: None)
@@ -1260,6 +1299,90 @@ def view(
             ui.meter(min(1.0, fuel / 100), thresholds={"warn": 0.8, "bad": 0.95}, role="fuel", key="fuel")
         )
     if not secret_ask and not clarification:
+        if state.held_message:
+            held = state.held_message
+            dock.append(
+                ui.col(
+                    ui.text(
+                        "Previous send uncertain · review before resending"
+                        if state.held_uncertain
+                        else "Message not sent · retained for review",
+                        key="title",
+                    ),
+                    ui.text(held.label[:160], tone="muted", key="text"),
+                    attachment_strip(held.images, assets),
+                    ui.row(
+                        button("Restore message", lambda: action("image-held-restore"), key="restore"),
+                        button("Discard message", lambda: action("image-held-discard"), key="discard"),
+                        wrap=True,
+                        gap="sm",
+                        key="actions",
+                    ),
+                    key="held-message",
+                    role="image-controls",
+                    gap="sm",
+                )
+            )
+        dock.append(
+            ui.col(
+                ui.row(
+                    button(
+                        "Attach image",
+                        lambda: action("image-path"),
+                        key="attach",
+                        disabled=state.image_loading,
+                    ),
+                    button(
+                        "Paste image",
+                        lambda: action("image-paste"),
+                        key="paste",
+                        disabled=state.image_loading,
+                    ),
+                    ui.text(
+                        "Importing image…" if state.image_loading else "PNG / JPEG",
+                        tone="muted",
+                        key="status",
+                    ),
+                    wrap=True,
+                    gap="sm",
+                    key="actions",
+                ),
+                attachment_strip(state.draft_images, assets, action),
+                role="image-controls",
+                key="image-controls",
+                gap="sm",
+            )
+        )
+        if image_path is not None:
+            dock.append(
+                ui.col(
+                    ui.text("Image file path", key="label"),
+                    ui.editor(
+                        image_path.text,
+                        cursor=image_path.caret,
+                        placeholder="/path/to/image.png",
+                        sendable=not state.image_loading,
+                        readonly=state.image_loading,
+                        key="attach-path",
+                        role="attachment-path",
+                    ),
+                    ui.row(
+                        button(
+                            "Attach",
+                            lambda: action("image-path-submit"),
+                            disabled=state.image_loading,
+                            key="attach",
+                        ),
+                        button("Cancel", lambda: action("image-path-close"), key="cancel"),
+                        wrap=True,
+                        gap="sm",
+                        key="actions",
+                    ),
+                    role="image-controls",
+                    key="image-path",
+                    gap="sm",
+                )
+            )
         dock.append(slash_list(state, draft, commands))
     if state.exit_armed is not None:
         dock.append(
@@ -1286,6 +1409,7 @@ def view(
             # Not readonly on failure: /doctor and /quit must still be typeable.
             readonly=False,
             sendable=state.ready
+            and not state.image_loading
             and not state.failed
             and not state.switching
             and (not state.busy or bool(clarification)),
@@ -1294,9 +1418,14 @@ def view(
         )
     )
     can_send = (
-        bool(active_draft.text.strip())
+        (
+            bool(active_draft.text.strip())
+            or (bool(state.draft_images) and not secret_ask and not clarification)
+        )
+        and not state.image_loading
         and state.ready
         and not state.failed
+        and (not state.held_message or bool(secret_ask) or bool(clarification))
         and not state.switching
         and (not state.busy or bool(clarification))
     )
@@ -1304,7 +1433,12 @@ def view(
         send_action = ui.seg(
             "esc stop", side="right", role="stop", key="action", priority=100, on_click=lambda _: stop()
         )
-        queueable = bool(active_draft.text.strip()) and state.ready and not state.failed
+        queueable = (
+            (bool(active_draft.text.strip()) or bool(state.draft_images))
+            and not state.image_loading
+            and state.ready
+            and not state.failed
+        )
     else:
         queueable = False
         send = submit or (lambda: None)
@@ -1330,7 +1464,14 @@ def view(
             index,
             ui.row(
                 ui.text(
-                    [ui.span("queued · ", "accent"), ui.span(held[:80], "muted")],
+                    [
+                        ui.span("queued · ", "accent"),
+                        ui.span(
+                            held.label[:80]
+                            + (f" · {len(held.images)} image(s)" if held.images and held.text else ""),
+                            "muted",
+                        ),
+                    ],
                     role="queued",
                     key="queued",
                 ),
@@ -1408,7 +1549,12 @@ def view(
             # class changes, so its entrance does not play again when the list closes.
             ui.html.div(
                 *rows,
-                class_="hft-welcome-stage" + (" hft-tucked" if slash_open(state, draft) else ""),
+                class_="hft-welcome-stage"
+                + (
+                    " hft-tucked"
+                    if slash_open(state, draft) or state.draft_images or image_path is not None
+                    else ""
+                ),
                 role="stage",
                 key="stage",
             )

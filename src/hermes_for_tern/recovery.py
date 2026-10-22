@@ -10,6 +10,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .messages import ImageRef, Message
+
 
 def private_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -40,14 +42,20 @@ class RecoveryStore:
                 data = json.loads(path.read_text())
                 if (
                     not isinstance(data, dict)
-                    or data.get("version") != 1
+                    or data.get("version") not in (1, 2)
                     or not isinstance(data.get("draft"), str)
                     or not isinstance(data.get("queue"), list)
-                    or not all(isinstance(text, str) for text in data["queue"])
+                    or not all(isinstance(text, (str, dict)) for text in data["queue"])
                     or not isinstance(data.get("session"), (str, type(None)))
                     or not isinstance(data.get("saved"), (int, float))
                 ):
                     continue
+                for message in data["queue"]:
+                    Message.read(message)
+                for image in data.get("draft_images", []):
+                    ImageRef.read(image)
+                if data.get("pending") is not None:
+                    Message.read(data["pending"])
                 pid = data.get("pid")
                 if isinstance(pid, int) and pid > 0:
                     try:
@@ -58,23 +66,40 @@ class RecoveryStore:
                         continue
                     else:
                         continue  # another live pane still owns this draft
-                if data["draft"] or data["queue"] or data.get("uncertain"):
+                if (
+                    data["draft"]
+                    or data["queue"]
+                    or data.get("uncertain")
+                    or data.get("draft_images")
+                    or data.get("pending")
+                ):
                     records.append({**data, "path": str(path)})
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):
                 continue
         return sorted(records, key=lambda record: record["saved"], reverse=True)
 
-    def save(self, draft: str, queued: list[str], session: str | None, uncertain: bool) -> None:
+    def save(
+        self,
+        draft: str,
+        queued: list[str | Message],
+        session: str | None,
+        uncertain: bool,
+        *,
+        images: tuple[ImageRef, ...] = (),
+        pending: Message | None = None,
+    ) -> None:
         data = {
-            "version": 1,
+            "version": 2,
             "draft": draft,
-            "queue": list(queued),
+            "queue": [Message.read(message).wire() for message in queued],
+            "draft_images": [image.wire() for image in images],
+            "pending": pending.wire() if pending is not None else None,
             "session": session,
             "uncertain": uncertain,
         }
         if data == self.last:
             return
-        if draft or queued or uncertain:
+        if draft or queued or uncertain or images or pending:
             private_write(
                 self.path,
                 json.dumps({**data, "saved": time.time(), "pid": os.getpid()}, ensure_ascii=False) + "\n",

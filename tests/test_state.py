@@ -17,6 +17,18 @@ from hermes_for_tern.state import (
 VALID = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
+def test_image_only_queue_keeps_immutable_attachments_and_destination():
+    from hermes_for_tern.messages import ImageRef, Message
+
+    image = ImageRef("a" * 64, "example.png", "image/png", 10, 10, 20)
+    message = Message("", (image,), "destination")
+    state = Conversation()
+    assert state.queue(message)
+    assert state.take_queued() == message
+    assert state.take_queued() is None
+    assert not state.queue("")
+
+
 def assistant_texts(state):
     return [row.text for row in state.rows if row.kind == "assistant"]
 
@@ -415,7 +427,7 @@ def test_non_success_completion_pauses_queued_work_even_with_an_unfamiliar_statu
     state.queue("later")
     state.event("message.complete", {"status": "cancelled"})
     assert not state.busy and state.queue_paused
-    assert state.queued == ["later"]
+    assert [message.text for message in state.queued] == ["later"]
 
 
 @pytest.mark.parametrize("origin", [0.0, 60.371208452, math.nextafter(2**19 - 4, math.inf), 2**30 + 0.1])

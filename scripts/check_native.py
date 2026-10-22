@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def native_app() -> int:
+def native_app(clipboard_path: str) -> int:
     import tern_sdk
 
     from hermes_for_tern.app import App
@@ -27,7 +27,11 @@ def native_app() -> int:
     if session is None:
         raise RuntimeError("Native QA needs Tern")
     command = [sys.executable, "-u", str(ROOT / "tests/fixtures/recovery_backend.py")]
-    return App(session, command, ROOT, {}).run()
+    instance = App(session, command, ROOT, {})
+    # Headless Tern's clipboard is process-local. Exercise its real empty paste signal,
+    # with the OS clipboard reader supplied by a fixture; never replace the user's clipboard.
+    instance.clipboard_reader = lambda _: Path(clipboard_path).read_bytes()
+    return instance.run()
 
 
 class Check:
@@ -70,6 +74,15 @@ class Check:
     def send(self, text: str) -> None:
         self.scenario(f"type {json.dumps(text)}\nkey enter")
 
+    def wait_images(self, count: int) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            buttons = [n for n in self.nodes() if n.get("tag") == "button" and n.get("text") == "Remove"]
+            if len(buttons) == count:
+                return
+            time.sleep(0.08)
+        raise RuntimeError(f"Expected {count} removable draft images")
+
     def click(self, label: str) -> None:
         nodes = self.wait(label)
         node = next(node for node in nodes if node.get("tag") == "button" and label in node.get("text", ""))
@@ -78,6 +91,10 @@ class Check:
 
     def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+
+        image_path = self.out / "native-clipboard.png"
+        Image.new("RGB", (160, 100), "red").save(image_path)
         state_home = self.out / "draft-state" / str(os.getpid())
         env = {
             **os.environ,
@@ -98,9 +115,47 @@ class Check:
                     if server.poll() is not None or time.monotonic() >= deadline:
                         raise RuntimeError(f"Tern did not start; see {self.out / 'tern.log'}")
                     time.sleep(0.08)
-                command = shlex.join([sys.executable, str(Path(__file__).resolve()), "--app"])
+                command = shlex.join(
+                    [sys.executable, str(Path(__file__).resolve()), "--app", str(image_path)]
+                )
                 self.scenario(f"account signed-in\nsize 1200 900\nready\nrun {json.dumps(command)}")
                 self.wait("What would you like to work on?")
+                self.click("Attach image")
+                self.send(str(image_path))
+                self.wait("native-clipboard.png")
+                self.scenario('shot "image-path"')
+                self.click("Remove")
+                self.wait("native-clipboard.png", absent=True)
+                self.scenario(f'clipboard flavor "image/png" {json.dumps(str(image_path))}\nkey meta+v')
+                self.wait("Clipboard image")
+                time.sleep(0.3)
+                self.scenario('shot "image-draft"\nsize 560 760\nshot "image-draft-narrow"')
+                self.scenario('appearance dark\nshot "image-draft-dark"')
+                for count in range(2, 5):
+                    self.scenario("key meta+v")
+                    self.wait_images(count)
+                self.scenario('shot "image-multiple-narrow"')
+                for count in (3, 2, 1):
+                    self.click("Remove")
+                    self.wait_images(count)
+                self.scenario("size 1200 900")
+                self.scenario("key enter")
+                self.wait("Received: [User attached images] · images=1")
+                self.send("plain after image")
+                self.wait("Received: plain after image")
+                assert not any(
+                    "Received: plain after image · images=" in n.get("text", "") for n in self.nodes()
+                )
+                self.send("wait")
+                self.wait("Waiting for Stop")
+                self.scenario("key meta+v")
+                self.wait("Remove")
+                self.send("queued with image")
+                self.wait("queued ·")
+                self.scenario("key escape")
+                self.wait("Queue paused")
+                self.click("Continue queue")
+                self.wait("Received: queued with image · images=1")
                 self.send("approval")
                 self.wait("Permission needed")
                 self.scenario('shot "approval"\nkey enter')
@@ -141,12 +196,14 @@ class Check:
                 self.wait("Queue paused")
                 self.scenario('type "unsent draft after restart"')
                 self.wait("unsent draft after restart")
+                self.scenario("key meta+v")
+                self.wait("Remove")
                 deadline = time.monotonic() + 5
                 record = None
                 while record is None:
                     for path in state_home.rglob("*.json"):
                         data = json.loads(path.read_text())
-                        if data.get("draft") == "unsent draft after restart":
+                        if data.get("draft") == "unsent draft after restart" and data.get("draft_images"):
                             record = data
                             break
                     if time.monotonic() >= deadline:
@@ -160,6 +217,7 @@ class Check:
                 self.click("Restore saved text")
                 self.wait("unsent draft after restart")
                 self.wait("Queue paused")
+                self.wait("Remove")
                 self.scenario('shot "draft-restored"')
                 assert not any("Received: survives restart" in node.get("text", "") for node in self.nodes())
                 self.scenario("key ctrl+u")
@@ -167,7 +225,7 @@ class Check:
                 self.wait("Native QA · controlled backend", absent=True)
                 assert self.ctl("state")["focused"]["last"]["status"] == 0
                 print(
-                    f"Native approval, clarification, paused queue, crash/resume, delegation, search, frontend restart and draft restoration: OK. Screenshots: {self.out / 'serve'}"
+                    f"Native image path/paste, image-only send, queued images, approval, clarification, crash/resume, search and image draft restoration: OK. Screenshots: {self.out / 'serve'}"
                 )
             finally:
                 try:
@@ -182,7 +240,7 @@ class Check:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--app"]:
-        raise SystemExit(native_app())
+    if sys.argv[1:2] == ["--app"]:
+        raise SystemExit(native_app(sys.argv[2]))
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "work/native-qa"
     Check(output.resolve()).run()

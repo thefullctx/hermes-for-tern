@@ -8,7 +8,7 @@ from .state import Conversation, Row
 
 
 def searchable(row: Row) -> str:
-    parts = [row.text, row.name, row.target, row.diff]
+    parts = [row.text, row.name, row.target, row.diff, *(image.name for image in row.images)]
     parts += [str(item.get("content") or "") for item in row.items]
     parts += [f"{agent.goal} {agent.summary}" for agent in row.agents]
     return "\n".join(parts)
@@ -41,6 +41,11 @@ def markdown(state: Conversation) -> str:
     for row in state.rows:
         if row.kind in ("user", "assistant"):
             lines += [f"## {'You' if row.kind == 'user' else 'Hermes'}", "", row.text, ""]
+            for image in row.images:
+                lines += [
+                    f"Image: {image.name} ({image.media}, {image.width} × {image.height}, {image.size} bytes). Image bytes are not embedded in this Markdown export.",
+                    "",
+                ]
         elif row.kind == "tool":
             lines += [f"### Tool: {row.name} — {row.status}", ""]
             if row.target:

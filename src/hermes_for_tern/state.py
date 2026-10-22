@@ -8,6 +8,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .messages import ImageRef, Message
+
 # Streamed text is released at an even pace: a backlog drains in about DRAIN seconds,
 # never slower than MIN_RATE characters per second.
 DRAIN = 0.35
@@ -86,6 +88,7 @@ class Row:
     key: str
     kind: str
     text: str = ""
+    images: tuple[ImageRef, ...] = ()
     name: str = ""
     target: str = ""
     status: str = "done"
@@ -312,11 +315,17 @@ class Conversation:
         self.dispatches: list[Dispatch] = []
         self._away: list[Dispatch] = []  # held until the pane is seen again
         self.last_prompt = ""
+        self.last_message: Message | None = None
+        self.held_message: Message | None = None
+        self.held_uncertain = False
+        self.draft_images: tuple[ImageRef, ...] = ()
+        self.image_loading = False
+        self.image_preparing = False
         self._paced_at = time.monotonic()
         self.heard = time.monotonic()  # when Hermes last sent anything but usage
         self.musing = False
         # Follow-ups composed while Hermes works, sent the moment the turn ends.
-        self.queued: list[str] = []
+        self.queued: list[Message] = []
         # Thinking effort: the level the ring shows, and when its name last floated.
         self.effort: str = "off"
         self.effort_notice: float | None = None
@@ -375,16 +384,17 @@ class Conversation:
         self.heard = self.turn_started
         self.touch()
 
-    def queue(self, text: str) -> bool:
+    def queue(self, text: str | Message) -> bool:
         """Hold a follow-up to send the moment the turn ends: you think of it while Hermes works."""
-        text = text.strip()
-        if not text or len(self.queued) >= QUEUE:
+        message = Message.read(text)
+        message = Message(message.text.strip(), message.images, message.destination)
+        if not (message.text or message.images) or len(self.queued) >= QUEUE:
             return False
-        self.queued.append(text)
+        self.queued.append(message)
         self.touch()
         return True
 
-    def take_queued(self) -> str | None:
+    def take_queued(self) -> Message | None:
         return self.queued.pop(0) if self.queued else None
 
     def unqueue(self, index: int) -> None:
@@ -882,6 +892,7 @@ class Conversation:
         self._todo_revision = -1
         self.title = ""
         self.last_prompt = ""
+        self.last_message = None
         self.resumed = False
         self.busy = False
 

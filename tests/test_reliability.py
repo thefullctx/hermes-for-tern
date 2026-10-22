@@ -61,7 +61,7 @@ def test_full_queue_keeps_new_draft_and_all_previous_messages():
         instance.submit(f"queued {index}")
     instance.submit("keep me 🪶")
     assert instance.draft.text == "keep me 🪶"
-    assert instance.state.queued == [f"queued {i}" for i in range(QUEUE)]
+    assert [message.text for message in instance.state.queued] == [f"queued {i}" for i in range(QUEUE)]
     assert not prompts(instance)
 
 
@@ -71,7 +71,7 @@ def test_unsuccessful_turns_pause_queue_until_explicit_continue(status):
     instance.state.begin("first")
     instance.submit("second")
     event(instance, "message.complete", {"status": status})
-    assert instance.state.queue_paused and instance.state.queued == ["second"]
+    assert instance.state.queue_paused and [message.text for message in instance.state.queued] == ["second"]
     assert not prompts(instance)
     assert "dock.queue-actions" in build(instance).nodes()
     instance.continue_queue()
@@ -84,7 +84,7 @@ def test_stop_pauses_queue_even_if_backend_reports_success_in_the_race():
     instance.submit("second")
     instance.stop()
     event(instance, "message.complete", {"status": "complete"})
-    assert not prompts(instance) and instance.state.queued == ["second"]
+    assert not prompts(instance) and [message.text for message in instance.state.queued] == ["second"]
 
 
 def test_new_draft_is_not_eaten_when_queue_continues():
@@ -132,7 +132,7 @@ def test_switching_with_paused_work_requires_resolving_old_session_queue():
     instance.state.queue("old session only")
     instance.resume_session("destination")
     assert not instance.switching
-    assert instance.state.queued == ["old session only"]
+    assert [message.text for message in instance.state.queued] == ["old session only"]
 
 
 def test_late_old_session_model_result_does_not_close_new_session_sheet():
@@ -159,7 +159,9 @@ def test_disconnect_clears_questions_and_sensitive_drafts_and_marks_unfinished_t
     assert instance.state.connection == "disconnected"
     assert instance.state.tools["t"].status == "cancelled"
     assert not instance.state.questions and not instance.secret.text and not instance.answer_draft.text
-    assert instance.draft.text == "ordinary" and instance.state.queued == ["later"]
+    assert instance.draft.text == "ordinary" and [message.text for message in instance.state.queued] == [
+        "later"
+    ]
     assert "dock.reconnect" in build(instance).nodes()
 
 
@@ -179,7 +181,9 @@ def test_reconnect_resumes_without_resending_previous_work(monkeypatch):
     assert fresh.requests[-1][:2] == ("session.resume", {"session_id": "stored", "cols": 100})
     answer(instance, "session.resume", STORED)
     assert instance.state.ready and instance.state.connection == "ready"
-    assert instance.draft.text == "unsent" and instance.state.queued == ["later"]
+    assert instance.draft.text == "unsent" and [message.text for message in instance.state.queued] == [
+        "later"
+    ]
     assert instance.state.queue_paused and not prompts(instance)
 
 
@@ -244,7 +248,9 @@ def test_draft_restore_resumes_its_own_session_and_never_sends_text(tmp_path, mo
     instance.restore_drafts()
     assert instance.backend.requests[-1][1]["session_id"] == "20261011_abc"
     answer(instance, "session.resume", STORED)
-    assert instance.draft.text == "draft 🪶" and instance.state.queued == ["queued"]
+    assert instance.draft.text == "draft 🪶" and [message.text for message in instance.state.queued] == [
+        "queued"
+    ]
     assert instance.state.queue_paused and not prompts(instance)
     assert not old.path.exists() and instance.store.path.exists()
 
@@ -429,5 +435,5 @@ def test_recover_slash_command_consumes_itself_without_erasing_restored_draft(tm
     instance.draft = Draft("/recover", 8)
     instance.submit()
     assert instance.draft.text == "restore this"
-    assert instance.state.queued == ["held"] and instance.state.queue_paused
+    assert [message.text for message in instance.state.queued] == ["held"] and instance.state.queue_paused
     assert not prompts(instance)

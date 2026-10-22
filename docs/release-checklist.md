@@ -70,3 +70,37 @@ These use the controlled backend and the real frontend, not a browser mockup.
 [Paused queue](../assets/reliability/queue-paused.png) ·
 [Narrow search in dark appearance](../assets/reliability/search-narrow-dark.png) ·
 [Draft and queue restored after frontend termination](../assets/reliability/draft-restored.png)
+
+## Image milestone validation — 22 October 2026
+
+- 197 automated tests pass locally on Python 3.11, 3.13 and 3.14. Coverage includes immutable image
+  snapshots, private storage, limits, missing files, old/new recovery, queue capacity, destination
+  routing, staged upload acknowledgement, reverse rollback, timeout fencing, and completion races.
+- Real Tern 0.8.3 (`e2b8656`) with the pinned SDK was traced: image-only clipboard paste produces
+  `Key(name="paste", text="")`. The SDK still carries no image bytes, so no SDK bump was needed.
+- The real App passed native path import/removal, paste handling, image-only send, queued image
+  association, a subsequent text-only message, four previews in a 560px dark pane, and forced
+  frontend restart with an image draft restored without sending. Styles loaded without errors.
+  Headless Tern uses a process-local clipboard; these repeatable checks inject fixture bytes into
+  the OS clipboard reader while exercising the native paste signal. They do not replace the
+  user's system clipboard or establish real OS clipboard extraction.
+- Live Hermes `v0.21.7+64.ga6c72dd` acknowledged an image upload (160×100), successfully detached it,
+  accepted a second image turn, and reported empty staging afterward. The model turn returned a
+  provider error, so successful vision interpretation remains unverified. Credentials, provider
+  settings, approvals and the Hermes installation were not changed.
+- Pillow is locked as an adapter dependency; the wheel includes the new modules and stylesheet.
+  Source/wheel builds, lint and formatting pass. Linux OS clipboard behavior needs manual testing;
+  CI covers the Python implementation on macOS/Linux.
+
+Before treating issue #20 as fully verified:
+
+- [ ] Copy an image in a desktop app, paste it into regular Tern, and verify the preview reflects
+  the copied image. Repeat after changing the clipboard while an earlier image is queued.
+- [ ] Send it to a working vision model and confirm an answer about its actual contents.
+- [ ] Exercise OS clipboard import on Linux Wayland/X11, or confirm the visible path fallback.
+
+The image PR addresses #20 without automatically closing it while these checks remain open.
+
+[Image draft in a narrow pane](../assets/images/draft-narrow.png) ·
+[Four previews in dark appearance](../assets/images/multiple-narrow-dark.png) ·
+[Image draft restored after frontend termination](../assets/images/draft-restored.png)
