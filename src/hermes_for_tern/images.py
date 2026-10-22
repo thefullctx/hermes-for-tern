@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import tempfile
 import time
 import warnings
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image
 
@@ -22,6 +24,36 @@ from .recovery import RecoveryStore
 
 PIXELS = 20_000_000
 RETENTION = 7 * 86400
+
+
+def dropped_image_path(text: str) -> str | None:
+    """Recognize one local image path, including shell-escaped terminal drops. Never run a shell."""
+    raw = text.strip()
+    if not raw or "\n" in raw or "\r" in raw:
+        return None
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        return None
+    if len(parts) == 1:
+        path = parts[0]
+    elif (
+        raw.startswith(("/", "~/", "./", "../"))
+        and "/" in parts[0].lstrip("/")
+        and not any(part.startswith(("/", "~/", "./", "../", "file://")) for part in parts[1:])
+    ):
+        # Native editors may provide an unescaped absolute path with spaces.
+        path = raw
+    else:
+        return None
+    if path.startswith("file://"):
+        url = urlsplit(path)
+        if url.netloc not in ("", "localhost") or url.query or url.fragment:
+            return None
+        path = unquote(url.path)
+    if not path.startswith(("/", "~/", "./", "../")):
+        return None
+    return path if Path(path).suffix.lower() in (".png", ".jpg", ".jpeg") else None
 
 
 def limit(name: str, default: int, maximum: int) -> int:

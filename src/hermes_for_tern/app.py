@@ -15,6 +15,7 @@ from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEven
 from .attachment_app import Attachments
 from .messages import ImageRef, Message
 from .editor import Draft
+from .images import dropped_image_path
 from .recovery import RecoveryStore
 from .transcript import markdown, matches
 from .rpc import Backend
@@ -1093,6 +1094,11 @@ class App(Attachments):
             if self.state.can_retry:
                 self.retry()
             return
+        # Terminal file drops arrive as text paths. Resolve them before slash-command dispatch.
+        if dropped_image_path(text) is not None:
+            self.draft = Draft(text, len(text))
+            if self.import_dropped_image():
+                return
         if text.strip().startswith("/"):
             # Consume the command first: /recover may replace it with a restored draft.
             self.draft = Draft()
@@ -1460,6 +1466,8 @@ class App(Attachments):
                 self.state.touch()
             elif item.id == "dock.composer":
                 draft.edit(item)
+                if draft is self.draft:
+                    self.import_dropped_image()
                 self.state.touch()
         elif isinstance(item, UndoEvent):
             if item.id == "dock.image-path.attach-path" and self.image_path_open:

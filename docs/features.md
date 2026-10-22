@@ -116,6 +116,11 @@ and it never automatically approves a request.
 
 ## Image attachments
 
+- Drop or paste a single local PNG/JPEG path into an empty composer to import it as a preview.
+  Shell-escaped and quoted paths (including screenshot names with spaces) and local `file://`
+  URLs are recognized. If a path arrives only when Send is pressed, that press imports it;
+  review the preview and press Send again. A failed import retains the path for correction.
+
 - Paste a copied image into the composer, click **Paste image**, or run `/paste-image`.
   **Attach image** opens a path field; `/attach [path]` supports quoted paths, spaces, `~`, and
   paths relative to this project. It opens no shell. PNG and JPEG are checked by their contents.

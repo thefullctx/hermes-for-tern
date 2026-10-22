@@ -11,7 +11,7 @@ from tern_sdk import Key
 
 from .delivery import ImageDelivery
 from .editor import Draft
-from .images import ImageStore, clipboard_image
+from .images import ImageStore, clipboard_image, dropped_image_path
 from .messages import ImageRef, Message
 
 
@@ -25,6 +25,7 @@ class Attachments:
             self.image_error = str(exc)
         self.clipboard_reader = clipboard_image
         self.image_load: Future | None = None
+        self.image_drop_draft: str | None = None
         self.image_path = Draft()
         self.image_path_open = False
         self.delivery: ImageDelivery | None = None
@@ -44,7 +45,22 @@ class Attachments:
                 f"{image.name}: saved image unavailable. Remove it and attach it again before sending.",
             )
 
-    def load_image(self, path: str | None = None) -> None:
+    def import_dropped_image(self) -> bool:
+        if (
+            self.state.secret()
+            or self.state.clarify()
+            or self.image_path_open
+            or self.state.sheet
+            or self.state.watch
+        ):
+            return False
+        path = dropped_image_path(self.draft.text)
+        if path is None:
+            return False
+        self.load_image(path, from_draft=self.draft.text)
+        return True
+
+    def load_image(self, path: str | None = None, *, from_draft: str | None = None) -> None:
         if self.restoring:
             self.state.add("notice", "Wait for saved work to finish restoring before importing an image.")
             return
@@ -67,6 +83,7 @@ class Attachments:
             )
             return
         future = self.image_load = Future()
+        self.image_drop_draft = from_draft
         self.state.image_loading = True
         self.state.touch()
         store, reader = self.image_store, self.clipboard_reader
@@ -97,11 +114,16 @@ class Attachments:
     def poll_images(self) -> None:
         if self.image_load and self.image_load.done():
             future, self.image_load = self.image_load, None
+            drop_draft, self.image_drop_draft = self.image_drop_draft, None
             self.state.image_loading = False
             try:
                 image = future.result()
                 if len(self.state.draft_images) < self.image_store.max_count:
                     self.state.draft_images += (image,)
+                    if drop_draft is not None:
+                        if self.draft.text.startswith(drop_draft):
+                            self.draft.replace(0, len(drop_draft), "")
+                        self.state.add("notice", "Image attached. Review the preview, then press Send.")
                     self.register_image(image)
                     self.image_path_open = False
                     self.image_path = Draft()
@@ -235,4 +257,13 @@ class Attachments:
         if item.name == "paste" and not item.text:
             self.load_image()
             return True
+        if (
+            item.name == "paste"
+            and item.text
+            and not self.draft.text
+            and not (self.state.secret() or self.state.clarify() or self.state.sheet or self.state.watch)
+            and dropped_image_path(item.text) is not None
+        ):
+            self.draft.key(item)
+            return self.import_dropped_image()
         return False

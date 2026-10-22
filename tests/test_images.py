@@ -10,7 +10,7 @@ from tern_sdk import Key
 
 from hermes_for_tern.delivery import ImageDelivery
 from hermes_for_tern.editor import Draft
-from hermes_for_tern.images import RETENTION, ImageStore, clipboard_image
+from hermes_for_tern.images import RETENTION, ImageStore, clipboard_image, dropped_image_path
 from hermes_for_tern.messages import ImageRef, Message
 from hermes_for_tern.recovery import RecoveryStore
 from test_app import FakeBackend, app
@@ -26,6 +26,94 @@ def picture(color="red", format="PNG"):
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     return ImageStore(tmp_path, None)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            r"/Users/neo/Screenshots/Screenshot\ 2026-10-23\ at\ 12.00.00.png ",
+            "/Users/neo/Screenshots/Screenshot 2026-10-23 at 12.00.00.png",
+        ),
+        ('"/Users/neo/Screenshots/a b.PNG"', "/Users/neo/Screenshots/a b.PNG"),
+        ("/Users/neo/Screenshots/a b.jpg", "/Users/neo/Screenshots/a b.jpg"),
+        ("file:///Users/neo/Screenshots/a%20b.jpeg", "/Users/neo/Screenshots/a b.jpeg"),
+        ("./images/example.png", "./images/example.png"),
+        ("~/Screenshots/a.png", "~/Screenshots/a.png"),
+        ("/help", None),
+        ("/model example.png", None),
+        ("/attach /tmp/a.png", None),
+        ("Please inspect /tmp/a.png", None),
+        ("file://other-host/tmp/a.png", None),
+        ("/tmp/one.png /tmp/two.png", None),
+        ('"/tmp/unfinished.png', None),
+    ],
+)
+def test_image_drop_path_detection_is_local_and_does_not_capture_commands(text, expected):
+    assert dropped_image_path(text) == expected
+
+
+@pytest.mark.parametrize("event", ["paste", "edit", "send", "enter"])
+def test_dropped_screenshot_with_escaped_spaces_becomes_preview_before_send(store, tmp_path, event):
+    from tern_sdk import EditEvent, SendEvent
+
+    instance = image_app(store)
+    source = tmp_path / "Screenshot 2026-10-23 at 12.00.00.png"
+    data = picture()
+    source.write_bytes(data)
+    escaped = str(source).replace(" ", r"\ ") + " "
+    if event == "paste":
+        instance.input(Key(name="paste", text=escaped))
+    elif event == "edit":
+        instance.input(
+            EditEvent(
+                raw={},
+                ev="edit",
+                sf="dock",
+                id="dock.composer",
+                from_=0,
+                to=0,
+                text=escaped,
+                len=0,
+                cursor=len(escaped),
+            )
+        )
+    elif event == "send":
+        instance.input(SendEvent(raw={}, ev="send", sf="dock", id="dock.composer", text=escaped))
+    else:
+        instance.draft = Draft(escaped, len(escaped))
+        instance.input(Key(name="enter"))
+    instance.image_load.result(timeout=2)
+    instance.poll_images()
+    assert instance.draft.text == "" and len(instance.state.draft_images) == 1
+    assert store.read(instance.state.draft_images[0]) == data
+    assert not instance.backend.requests
+    instance.submit()
+    assert instance.delivery.message.images[0].name == source.name
+    assert instance.backend.requests[-1][0] == "image.detach"
+
+
+def test_failed_drop_keeps_path_and_newly_typed_caption_is_preserved(store, tmp_path):
+    instance = image_app(store)
+    missing = str(tmp_path / "missing screenshot.png").replace(" ", r"\ ")
+    instance.input(Key(name="paste", text=missing))
+    try:
+        instance.image_load.result(timeout=2)
+    except ValueError:
+        pass
+    instance.poll_images()
+    assert instance.draft.text == missing and not instance.state.draft_images
+    assert not instance.backend.requests
+    source = tmp_path / "real screenshot.png"
+    source.write_bytes(picture())
+    dropped = str(source).replace(" ", r"\ ") + " "
+    instance.draft = Draft()
+    instance.input(Key(name="paste", text=dropped))
+    instance.draft.insert("What is in this image?")
+    instance.image_load.result(timeout=2)
+    instance.poll_images()
+    assert instance.draft.text == "What is in this image?"
+    assert len(instance.state.draft_images) == 1
 
 
 @pytest.mark.parametrize("format,media", [("PNG", "image/png"), ("JPEG", "image/jpeg")])

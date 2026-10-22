@@ -4,6 +4,9 @@
 
 ### Image attachments
 
+- Recognize local image paths dropped or pasted into an empty composer before slash-command
+  handling, including escaped spaces and local file URLs. Keep failed imports editable.
+
 - Handle Tern's empty image-paste signal with a bounded local clipboard snapshot; add Paste image,
   Attach image and `/attach` / `/paste-image` controls for PNG/JPEG.
 - Preview, remove and send images with or without text. Keep immutable image snapshots with queued
