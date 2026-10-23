@@ -141,7 +141,7 @@ class Attachments:
                 )
             except Exception:
                 self.state.add(
-                    "notice", "Could not import the image. Use Attach image to choose a PNG or JPEG."
+                    "notice", "Could not import the image. Use /attach <path> to choose a PNG or JPEG file."
                 )
             self.state.touch()
             self.save_drafts(force=True)

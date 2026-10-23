@@ -107,10 +107,10 @@ See the [full feature reference](docs/features.md) for details.
 
 ## Images
 
-Paste a copied image into the composer, choose **Paste image**, or use **Attach image** and enter
-a local path (`/attach /path/to/image.png`). Text and images travel together; sending without text
-is supported. Each preview has a **Remove** button. Images queued during a turn are uploaded only
-when their own message is ready to send.
+Paste a copied image into the composer, drag in an image file, or use `/paste-image`.
+Use `/attach` to enter a local path, or `/attach /path/to/image.png` to import it directly.
+Text and images travel together; sending without text is supported. Each preview has a **Remove**
+button. Images queued during a turn are uploaded only when their own message is ready to send.
 
 The defaults are four images per message, 8 MiB per image, and 20 megapixels. PNG and JPEG are
 supported. On macOS clipboard import uses the system clipboard; Linux needs `wl-paste` for Wayland

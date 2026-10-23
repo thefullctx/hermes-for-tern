@@ -156,7 +156,7 @@ def test_configuration_and_remote_clipboard_fail_with_actionable_errors(monkeypa
     with pytest.raises(ValueError, match="MAX_COUNT"):
         ImageStore(tmp_path, None)
     monkeypatch.setenv("SSH_CONNECTION", "remote")
-    with pytest.raises(ValueError, match="SSH.*Attach image"):
+    with pytest.raises(ValueError, match="SSH.*/attach"):
         clipboard_image(100)
 
 
@@ -585,3 +585,33 @@ def test_path_field_undo_and_stale_send_never_change_the_message(store):
         SendEvent(raw={}, ev="send", sf="dock", id="dock.image-path.attach-path", text="/tmp/missing.png")
     )
     assert instance.image_load is None and instance.draft.text == "message retained"
+
+
+def test_image_import_failure_points_to_attach_command(store):
+    from concurrent.futures import Future
+
+    instance = image_app(store)
+    instance.image_load = Future()
+    instance.image_load.set_exception(RuntimeError("unexpected importer failure"))
+    instance.poll_images()
+    assert any("Use /attach <path>" in row.text for row in instance.state.rows)
+
+
+@pytest.mark.parametrize("failure", ["ssh", "missing-helper", "unreadable"])
+def test_clipboard_failure_messages_point_to_attach_command(monkeypatch, failure):
+    for key in ("SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"):
+        monkeypatch.delenv(key, raising=False)
+    if failure == "ssh":
+        monkeypatch.setenv("SSH_CONNECTION", "remote")
+    elif failure == "missing-helper":
+        monkeypatch.setattr("hermes_for_tern.images.sys.platform", "linux")
+        monkeypatch.setattr("hermes_for_tern.images.shutil.which", lambda _: None)
+    else:
+        monkeypatch.setattr("hermes_for_tern.images.sys.platform", "darwin")
+
+        def unavailable(*args, **kwargs):
+            raise OSError("clipboard unavailable")
+
+        monkeypatch.setattr("hermes_for_tern.images.subprocess.Popen", unavailable)
+    with pytest.raises(ValueError, match="/attach <path>"):
+        clipboard_image(1 << 20)

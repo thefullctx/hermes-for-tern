@@ -2,6 +2,7 @@ import re
 import time
 from pathlib import Path
 
+import pytest
 from tern_sdk.reconcile import View
 
 from hermes_for_tern.editor import Draft
@@ -11,6 +12,41 @@ from hermes_for_tern.views import CLIP, trail, view
 
 def noop(*args):
     pass
+
+
+@pytest.mark.parametrize("has_images", [False, True])
+@pytest.mark.parametrize("loading", [False, True])
+@pytest.mark.parametrize("text", ["", "/"])
+def test_dock_only_shows_draft_thumbnails_and_active_image_loading(has_images, loading, text):
+    from hermes_for_tern.messages import ImageRef
+
+    state = Conversation()
+    state.ready = True
+    state.image_loading = loading
+    image = ImageRef("a" * 64, "example.png", "image/png", 160, 100, 500)
+    state.draft_images = (image,) if has_images else ()
+    built = View.build(
+        view(
+            state,
+            Draft(text),
+            Draft(),
+            Path("/p"),
+            noop,
+            noop,
+            noop,
+            noop,
+            noop,
+            assets={"attachment:" + image.id: "blob-id"},
+            action=noop,
+        )
+    )
+    nodes = built.nodes()
+    labels = [node.wire().get("p", {}).get("text") for node in nodes.values()]
+    assert "Attach image" not in labels and "Paste image" not in labels and "PNG / JPEG" not in labels
+    assert ("dock.image-controls" in nodes) == (has_images or loading)
+    assert ("Importing image…" in labels) == loading
+    assert ("dock.image-controls.attachments.image-0.preview" in nodes) == has_images
+    assert any(key.endswith(".remove") for key in nodes) == has_images
 
 
 def test_attachment_composer_preview_remove_image_only_send_and_path_identity():

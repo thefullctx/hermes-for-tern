@@ -133,8 +133,8 @@ and it never automatically approves a request.
   URLs are recognized. If a path arrives only when Send is pressed, that press imports it;
   review the preview and press Send again. A failed import retains the path for correction.
 
-- Paste a copied image into the composer, click **Paste image**, or run `/paste-image`.
-  **Attach image** opens a path field; `/attach [path]` supports quoted paths, spaces, `~`, and
+- Paste a copied image into the composer or run `/paste-image`.
+  `/attach` opens a path field; `/attach <path>` supports quoted paths, spaces, `~`, and
   paths relative to this project. It opens no shell. PNG and JPEG are checked by their contents.
 - Previews show the filename, dimensions, size, and a **Remove** button. Send text and images
   together, or send an image alone. The source is copied when imported; later source-file or

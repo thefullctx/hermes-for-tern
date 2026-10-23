@@ -1323,36 +1323,13 @@ def view(
                     gap="sm",
                 )
             )
-        dock.append(
-            ui.col(
-                ui.row(
-                    button(
-                        "Attach image",
-                        lambda: action("image-path"),
-                        key="attach",
-                        disabled=state.image_loading,
-                    ),
-                    button(
-                        "Paste image",
-                        lambda: action("image-paste"),
-                        key="paste",
-                        disabled=state.image_loading,
-                    ),
-                    ui.text(
-                        "Importing image…" if state.image_loading else "PNG / JPEG",
-                        tone="muted",
-                        key="status",
-                    ),
-                    wrap=True,
-                    gap="sm",
-                    key="actions",
-                ),
-                attachment_strip(state.draft_images, assets, action),
-                role="image-controls",
-                key="image-controls",
-                gap="sm",
-            )
-        )
+        image_controls = []
+        if state.image_loading:
+            image_controls.append(ui.text("Importing image…", tone="muted", key="status"))
+        if state.draft_images:
+            image_controls.append(attachment_strip(state.draft_images, assets, action))
+        if image_controls:
+            dock.append(ui.col(*image_controls, role="image-controls", key="image-controls", gap="sm"))
         if image_path is not None:
             dock.append(
                 ui.col(
