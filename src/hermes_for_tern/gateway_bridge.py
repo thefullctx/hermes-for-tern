@@ -479,8 +479,14 @@ async def serve(grant: dict) -> None:
                     future = pending.get(frame.get("id"))
                     if future is not None:
                         if not future.done():
-                            if isinstance(frame.get("error"), dict) and "result" not in frame:
-                                future.set_exception(RpcError(frame["error"]))
+                            error = frame.get("error")
+                            if (
+                                isinstance(error, dict)
+                                and type(error.get("code")) is int
+                                and isinstance(error.get("message"), str)
+                                and "result" not in frame
+                            ):
+                                future.set_exception(RpcError(error))
                             elif isinstance(frame.get("result"), dict) and "error" not in frame:
                                 future.set_result(frame["result"])
                             else:

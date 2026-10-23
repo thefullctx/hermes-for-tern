@@ -558,7 +558,16 @@ def test_missing_revision_fails_before_send_even_during_another_inflight_request
 
 
 @pytest.mark.parametrize("method", ["prompt.submit", "slash.exec", "command.dispatch", "image.attach_bytes"])
-@pytest.mark.parametrize("reply", [None, {"result": []}, {"result": None}])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        {"result": []},
+        {"result": None},
+        {"error": {}},
+        {"result": {}, "error": {"code": 4001, "message": "refused"}},
+    ],
+)
 def test_uncertain_mutations_and_commands_disconnect_without_retry(monkeypatch, method, reply):
     async def scenario(socket, send, output, until):
         send({"id": 1, "method": method, "params": {"session_id": "s"}})
@@ -746,3 +755,21 @@ def test_only_large_listing_and_explicit_model_refresh_get_longer_deadlines(monk
         assert socket.wait_limits == [90, 90, 30, 30, 30]
 
     run(bridge_scenario(monkeypatch, lambda frame: {"result": {}}, scenario))
+
+
+def test_malformed_read_only_acknowledgement_fails_only_its_request(monkeypatch):
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": "session.list"})
+        await until(lambda: bool(output))
+        assert "Malformed gateway acknowledgement" in output[0]["error"]["message"]
+        send({"id": 2, "method": "client.capabilities"})
+        await until(lambda: any(row.get("id") == 2 for row in output))
+        assert not socket.closed and not any("local_error" in row for row in output)
+
+    run(
+        bridge_scenario(
+            monkeypatch,
+            lambda f: {"error": {}} if f["method"] == "session.list" else {"result": {}},
+            scenario,
+        )
+    )
