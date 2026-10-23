@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 — 2026-10-23
+
 ### Image attachments
 
 - Remove the permanent Attach image / Paste image buttons and idle hint from the composer;

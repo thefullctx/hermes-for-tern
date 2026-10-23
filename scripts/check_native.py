@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from hermes_for_tern import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -23,7 +25,7 @@ def native_app(clipboard_path: str) -> int:
 
     from hermes_for_tern.app import App
 
-    session = tern_sdk.connect(app="hermes", version="0.1.0", features=("edit", "undo", "send"))
+    session = tern_sdk.connect(app="hermes", version=__version__, features=("edit", "undo", "send"))
     if session is None:
         raise RuntimeError("Native QA needs Tern")
     command = [sys.executable, "-u", str(ROOT / "tests/fixtures/recovery_backend.py")]

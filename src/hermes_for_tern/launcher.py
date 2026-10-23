@@ -12,6 +12,8 @@ from pathlib import Path
 
 import tern_sdk
 
+from . import __version__
+
 MARKER = "# hermes-for-tern managed launcher"
 
 
@@ -193,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         options = native_options(args)
         if options is None:
             return passthrough(original, args)
-        session = tern_sdk.connect(app="hermes", version="0.1.0", features=("edit", "undo", "send"))
+        session = tern_sdk.connect(app="hermes", version=__version__, features=("edit", "undo", "send"))
         if session is None:
             if options.get("demo") is not None:
                 raise RuntimeError("The visual demo needs Tern. Run hermes --demo inside Tern.")

@@ -17,6 +17,7 @@ from pathlib import Path
 from tern_sdk import wire
 from tern_sdk.reconcile import View
 
+from hermes_for_tern import __version__
 from hermes_for_tern.design import CSS, DARK, LIGHT, images
 from hermes_for_tern.editor import Draft
 from hermes_for_tern.state import Conversation
@@ -27,7 +28,7 @@ FPS = 30
 MODEL = "hermes-4-405b"
 # The handshake a dark Tern 0.5 pane answers with, so a replay opens like a live session.
 HELLO = [
-    {"verb": "q", "dir": "out", "body": {"q": "hello", "v": [1], "app": "hermes", "ver": "0.1.0",
+    {"verb": "q", "dir": "out", "body": {"q": "hello", "v": [1], "app": "hermes", "ver": __version__,
                                          "features": ["edit", "undo", "send"]}},
     {"verb": "r", "dir": "in", "body": {
         "r": "hello", "v": 1, "term": "tern", "ver": "0.5.0",
