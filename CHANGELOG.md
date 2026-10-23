@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Split command handling, sheets, session switching, recovery and transcript components into
+  focused modules while preserving behavior and existing public imports.
+
 ## 0.1.0 — 2026-10-23
 
 ### Image attachments

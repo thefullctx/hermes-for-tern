@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import queue
-import os
-import shlex
+import os as os
+import shlex as shlex
 import time
 import threading
 from concurrent.futures import Future
@@ -13,31 +13,41 @@ from pathlib import Path
 from tern_sdk import EditEvent, ErrorEvent, FocusEvent, GoneEvent, Key, SendEvent, UndoEvent, VisibleEvent
 
 from .attachment_app import Attachments
-from .messages import ImageRef, Message
+from .slash_app import (
+    Commands,
+    COMMANDS as COMMANDS,
+    HELP as HELP,
+    DISPATCH_CODES as DISPATCH_CODES,
+    NOTE_CHARS as NOTE_CHARS,
+    NOTE_LINES as NOTE_LINES,
+)
+from .sheet_app import Sheets
+from .session_app import Sessions, SESSIONS as SESSIONS
+from .recovery_app import Recovery
+from .messages import ImageRef as ImageRef, Message
 from .editor import Draft
 from .images import dropped_image_path
 from .recovery import RecoveryStore
-from .transcript import markdown, matches
+from .transcript import markdown as markdown, matches as matches
 from .rpc import Backend
 from .state import SECRET_METHODS, TAIL, Conversation, Question, hermes_effort
 from .design import CSS, DARK, LIGHT, send_assets
-from .views import ALIASES, COMMAND_ROWS, sheet_cursor, sheet_rows, slash_open, slash_rows, slash_typed, view
+from .views import (
+    ALIASES as ALIASES,
+    COMMAND_ROWS as COMMAND_ROWS,
+    sheet_cursor as sheet_cursor,
+    sheet_rows as sheet_rows,
+    slash_open as slash_open,
+    slash_rows as slash_rows,
+    slash_typed as slash_typed,
+    view,
+)
 
 # Keys that pick a question's choice, in the order the card shows them.
 DIGITS = "123456789"
-# The commands this pane answers itself; every other `/command` is Hermes's. What each does lives
-# beside the list that offers them, so `/help` cannot drift from the keyboard.
-COMMANDS = tuple(name.split(" ")[0] for name, _ in COMMAND_ROWS)
-HELP = "In this pane: " + " · ".join(COMMANDS)
-# `slash.exec` refusals that mean "not mine, ask command.dispatch" (skills, bundles, pending input).
-DISPATCH_CODES = (4011, 4018)
-# Sessions `/resume` lists, newest first.
-SESSIONS = 50
-# Output longer than this folds into a row of its own instead of a one-line note.
-NOTE_CHARS, NOTE_LINES = 180, 2
 
 
-class App(Attachments):
+class App(Attachments, Commands, Sheets, Sessions, Recovery):
     def __init__(self, session, command: list[str], cwd: Path, options: dict):
         self.session = session
         self.command = command
@@ -214,73 +224,6 @@ class App(Attachments):
                         self.request("approval.received", self.scoped(request_id=request_id))
             self._ack_approvals.clear()
 
-    def fail(self, message: str) -> None:
-        if self.state.failed:
-            return
-        if self.inflight:
-            self.state.held_message = self.inflight
-            self.state.held_uncertain = True
-            self.inflight = None
-        self.delivery = None
-        self.state.image_preparing = False
-        self.state.add("error", message)
-        self.state.failed = True
-        self.state.ready = False
-        self.state.connection = "disconnected"
-        self.state.queue_paused = True
-        self.state.questions.clear()
-        self.state.close_watch()
-        self._ack_approvals.clear()
-        self.secret = Draft()
-        self.answer_draft = Draft()
-        for tool in self.state.tools.values():
-            if tool.status == "running":
-                tool.status = "cancelled"
-        for agent in self.state.agents.values():
-            if agent.status in ("running", "pending"):
-                agent.status = "aborted"
-        if self.state.busy:
-            self.uncertain_work = True
-            self.state.add(
-                "notice", "Work was interrupted. It may already have changed files; it will not be resent."
-            )
-        self.state.busy = False
-        self.state.activity = "Disconnected — reconnect to resume"
-        self.recovering = False
-        if self.switching:
-            self.switch_failed()
-        self.switching = None
-        self.state.switching = False
-        self.state.touch()
-        self.save_drafts(force=True)
-
-    def update_saved(self) -> None:
-        self.state.recovery_available = bool(self.saved_records)
-        record = self.saved_records[0] if self.saved_records else {}
-        self.state.recovery_label = str(record.get("session") or "a session that did not finish starting")
-        self.state.touch()
-
-    def save_drafts(self, *, force: bool = False) -> None:
-        if not self.store or (not force and time.monotonic() - self._saved_at < 0.5):
-            return
-        self._saved_at = time.monotonic()
-        try:
-            self.store.save(
-                self.draft.text,
-                self.state.queued + self.held_switch,
-                self.switching or self.state.stored_session_id,
-                self.state.busy or self.uncertain_work or self.state.held_uncertain,
-                images=self.state.draft_images,
-                pending=self.inflight or self.state.held_message,
-            )
-            self._save_failed = False
-        except OSError:
-            if not self._save_failed:
-                self.state.add(
-                    "notice", "Draft recovery could not be saved. Keep this pane open to retain your text."
-                )
-                self._save_failed = True
-
     def reconnect(self, *, fresh: bool = False) -> None:
         if self.state.connection in ("connecting", "recovering") and not self.state.failed:
             return
@@ -323,135 +266,6 @@ class App(Attachments):
         except (OSError, RuntimeError) as exc:
             self.fail(str(exc))
         self.state.touch()
-
-    def restore_drafts(self) -> None:
-        if not self.saved_records or self.restoring:
-            return
-        if not self.state.ready and not self.state.failed:
-            self.state.add("notice", "Wait for Hermes to finish connecting before restoring saved text.")
-            return
-        if (
-            self.state.busy
-            or self.switching
-            or self.draft.text
-            or self.state.queued
-            or self.state.draft_images
-            or self.state.image_loading
-            or self.state.held_message
-        ):
-            self.state.add(
-                "notice",
-                "Finish this turn and send or clear your current draft and queue before restoring saved text.",
-            )
-            return
-        self.restoring = self.saved_records[0]
-        target = self.restoring.get("session")
-        if target and target != self.state.stored_session_id:
-            if self.state.ready:
-                self.resume_session(target)
-            else:
-                self.state.stored_session_id = target
-                self.reconnect()
-        else:
-            self.apply_restored()
-
-    def apply_restored(self) -> None:
-        record = self.restoring
-        if not record:
-            return
-        if self.draft.text or self.state.draft_images or self.state.image_loading or self.state.queued:
-            self.restoring = None
-            self.state.add(
-                "notice",
-                "Your current draft changed while restoring. Saved work is still available; clear this draft and restore again.",
-            )
-            return
-        self.draft = Draft(record["draft"], len(record["draft"]))
-        self.state.queued = [Message.read(message) for message in record["queue"]]
-        self.state.draft_images = tuple(ImageRef.read(image) for image in record.get("draft_images", []))
-        self.state.held_message = (
-            Message.read(record["pending"]) if record.get("pending") is not None else None
-        )
-        self.state.held_uncertain = bool(record.get("uncertain"))
-        images = list(self.state.draft_images)
-        images += [image for message in self.state.queued for image in message.images]
-        if self.state.held_message:
-            images += list(self.state.held_message.images)
-        for image in images:
-            self.register_image(image)
-        self.state.queue_paused = True
-        # Write our replacement before removing the original recovery file.
-        self.save_drafts(force=True)
-        if self.store and not self._save_failed:
-            try:
-                self.store.forget(record)
-                self.saved_records.remove(record)
-            except OSError:
-                self.state.add("notice", "Text restored, but its old recovery file could not be removed.")
-        self.restoring = None
-        self.update_saved()
-        self.state.add(
-            "notice",
-            "Saved text restored; nothing was sent. Queued messages are paused. Previously submitted work may already have run.",
-        )
-
-    def continue_queue(self) -> None:
-        if not self.state.ready or self.state.failed or self.switching or self.state.busy:
-            return
-        if self.state.held_message:
-            self.state.add("notice", "Restore or discard the retained message before continuing the queue.")
-            return
-        self.state.queue_paused = False
-        self.send_queued()
-        self.state.touch()
-
-    def send_queued(self) -> None:
-        if (
-            self.state.queued
-            and not self.state.queue_paused
-            and not self.switching
-            and self.delivery is None
-            and self.state.held_message is None
-            and not self.state.busy
-            and self.state.ready
-            and not self.state.failed
-        ):
-            message = self.state.take_queued()
-            self.send_message(message)
-
-    def local_action(self, action: str) -> None:
-        if action.startswith("image-"):
-            self.attachment_action(action)
-            return
-        if action == "reconnect":
-            self.reconnect()
-        elif action == "new-session":
-            self.reconnect(fresh=True)
-        elif action == "restore":
-            self.restore_drafts()
-        elif action == "forget-saved" and self.saved_records and self.store:
-            try:
-                self.store.forget(self.saved_records.pop(0))
-                self.update_saved()
-            except OSError:
-                self.state.add("notice", "Could not remove the saved draft.")
-        elif action == "continue-queue":
-            self.continue_queue()
-        elif action == "discard-queue":
-            self.state.queued.clear()
-            self.state.touch()
-        elif action in ("find-next", "find-previous"):
-            found = matches(self.state)
-            if found:
-                self.state.search_index = (
-                    self.state.search_index + (1 if action == "find-next" else -1)
-                ) % len(found)
-                found[self.state.search_index].collapsed = False
-                self.state.touch()
-        elif action == "find-close":
-            self.state.search_query = ""
-            self.state.touch()
-        self.save_drafts(force=True)
 
     def read_backend(self) -> None:
         if not self.backend:
@@ -661,65 +475,6 @@ class App(Attachments):
         # Requests scheduled by the handlers above must survive this iteration.
         self.pending = remaining + self.pending
 
-    @property
-    def cols(self) -> int:
-        return self.session.caps.cols or 80
-
-    def profiled(self, **params) -> dict:
-        """Params for a call that reaches Hermes's session store, in the launch profile's home."""
-        profile = self.options.get("profile")
-        return {**params, **({"profile": profile} if profile else {})}
-
-    def create_session(self) -> None:
-        params = {
-            "cwd": str(self.cwd),
-            "cwd_explicit": True,
-            "source": "tui",
-            "title": "Hermes for Tern",
-            "cols": self.cols,
-            **self.options,
-        }
-        self.request("session.create", params)
-
-    def start_fresh(self, why: str) -> None:
-        """Initial CLI resume may fall back; recovery must never silently change sessions."""
-        if self.recovering or self.restoring:
-            self.fail(f"{why}. Retry recovery or explicitly start a new session; your text is retained.")
-            self.recovery_error = True
-            self.restoring = None
-            return
-        self.state.add("notice", f"{why}. This is a new session.")
-        self.resume = None
-        self.create_session()
-
-    def session_ready(self, result: dict, *, stored: str | None) -> None:
-        if not isinstance(result.get("session_id"), str) or not result["session_id"]:
-            raise ValueError("Hermes returned an invalid session id.")
-        self.state.session_id = result["session_id"]
-        self.state.stored_session_id = stored if isinstance(stored, str) else None
-        self.state.info.update(result.get("info") or {})
-        self.state.ready = True
-        self.state.failed = False
-        self.state.connection = "ready"
-        self.state.activity = "Ready"
-        self.state.touch()
-
-    def resume_hint(self) -> str:
-        """What Hermes's own terminal says on the way out: how to come back to this session. Nothing
-        when the session never held a conversation, since Hermes keeps no record of it then."""
-        stored = self.state.stored_session_id
-        if not stored or not (self.state.last_prompt or self.state.resumed):
-            return ""
-        profile = self.options.get("profile")
-        flag = f" -p {shlex.quote(profile)}" if profile and profile not in ("default", "custom") else ""
-        lines = ["Resume this session with:", f"  hermes --resume {shlex.quote(stored)}{flag}"]
-        if self.state.title:
-            title = self.state.title
-            # Preserve the familiar quoted hint for ordinary titles, escape shell expansion.
-            escaped = title.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
-            lines.append(f'  hermes -c "{escaped}"{flag}')
-        return "\n".join(lines)
-
     def server_request(self, frame: dict) -> None:
         assert self.backend
         rid, method, params = str(frame["id"]), frame["method"], frame.get("params") or {}
@@ -827,101 +582,6 @@ class App(Attachments):
         elif action == "close":
             self.state.close_watch()
 
-    def model_event(self, action: str, value: str = "") -> None:
-        """The model sheet's own events: `open` from the model segment, `pick` from a row,
-        `confirm` from its switch key, `cancel` from its cancel key or the backdrop."""
-        if self.state.failed or self.switching:
-            return
-        if action == "open":
-            if self.state.session_id:
-                self.request("model.options", self.scoped(refresh=True))
-            self.state.open_sheet()
-        elif action == "pick":
-            if value and self.state.sheet and self.state.sheet.kind == "sessions":
-                self.resume_session(value)
-            elif value:
-                self.state.choose_row(value)
-                self.switch_model(value)
-        elif action == "confirm":
-            self.confirm_model()
-        elif action == "cancel":
-            self.state.close_sheet()
-
-    def sheet_key(self, item) -> bool:
-        """The model sheet owns the keyboard while it is open: type to filter, arrows to move the
-        cursor, Enter to switch, Escape to put it away. True when the key was the sheet's."""
-        sheet = self.state.sheet
-        if self.state.secret() or self.state.clarify():
-            return False
-        if sheet is None or item.ctrl or item.alt or item.meta:
-            return False
-        if item.name == "escape":
-            self.state.close_sheet()
-        elif item.name == "enter":
-            self.confirm_model()
-        elif item.name == "backspace":
-            self.state.filter_sheet(sheet.query[:-1])
-        elif item.name in ("up", "down"):
-            self.move_sheet(item.name == "down")
-        elif item.text:
-            self.state.filter_sheet(sheet.query + item.text)
-        else:
-            return False
-        return True
-
-    def move_sheet(self, down: bool) -> None:
-        rows = [row["id"] for row in sheet_rows(self.state)]
-        if not rows:
-            return
-        at = rows.index(self.state.sheet.chosen) if self.state.sheet.chosen in rows else -1
-        self.state.choose_row(rows[max(0, min(len(rows) - 1, at + (1 if down else -1)))])
-
-    def confirm_model(self) -> None:
-        """The switch key: the chosen row, or the session's own model when nothing was chosen."""
-        if not self.state.sheet:
-            return
-        if self.state.sheet.kind == "sessions":
-            self.resume_session(sheet_cursor(self.state))
-            return
-        if self.state.sheet.confirming:
-            self.switch_model(self.state.sheet.chosen, confirmed=True)
-            return
-        chosen = sheet_cursor(self.state)
-        if chosen:
-            self.switch_model(chosen)
-
-    def switch_model(self, value: str, *, confirmed: bool = False) -> None:
-        """Ask Hermes to run another model. Mid-turn it holds the pick for the next turn start and
-        reports it in session.info; an expensive model asks first, which is what `confirmed` is."""
-        if self.state.failed or self.switching:
-            return
-        if not value or not self.state.session_id:
-            return
-        if self.state.sheet:
-            # The sheet's row is the pending pick, so a confirmation repeats the same one.
-            self.state.choose_row(value)
-        params: dict = {"key": "model", "value": value}
-        if confirmed:
-            params["confirm_expensive_model"] = True
-        self.request("config.set", self.scoped(**params))
-
-    def rename_session(self, title: str) -> None:
-        """Name this session; Hermes owns the title and echoes it back on `session.title`."""
-        if title and self.state.session_id:
-            self.request("session.title", self.scoped(title=title))
-
-    def side_question(self, text: str) -> None:
-        """Ask Hermes something beside the work it is doing; the answer lands as a dispatch."""
-        if not text or not self.state.session_id:
-            return
-        self.request("prompt.btw", self.scoped(text=text))
-
-    def background_task(self, text: str) -> None:
-        """Hand Hermes a task on a fresh agent; the answer lands as a dispatch when it is done."""
-        if not text or not self.state.session_id:
-            return
-        self.request("prompt.background", self.scoped(text=text))
-
     def watch_agent(self, subagent_id: str) -> None:
         """Open a delegated child: its live transcript, refreshed, with interrupt and steer."""
         self.state.open_watch(subagent_id)
@@ -944,73 +604,6 @@ class App(Attachments):
             return
         self.request("subagent.steer", self.scoped(subagent_id=watch.id, text=text))
         self.state.steer_watch("")
-
-    def slash_key(self, item) -> bool:
-        """The command list answers the keyboard while it shows: arrows move, Tab completes the
-        highlighted command, Enter runs it (or completes one that still needs its argument), and
-        Escape puts the list away until the draft changes. True when the key was the list's."""
-        if item.ctrl or item.alt or item.meta or self.state.secret() or self.state.clarify():
-            return False
-        if self.state.sheet or self.state.watch or not slash_open(self.state, self.draft):
-            return False
-        rows = slash_rows(self.state, self.draft.text)
-        at = min(self.state.slash.cursor, len(rows) - 1)
-        if item.name in ("up", "down"):
-            self.state.slash.cursor = (at + (1 if item.name == "down" else -1)) % len(rows)
-        elif item.name == "tab":
-            self.complete_command(rows[at])
-        elif item.name == "enter" and not item.shift:
-            self.complete_command(rows[at], run=True)
-        elif item.name == "escape":
-            self.state.slash.put_away = self.draft.text
-        else:
-            return False
-        self.state.touch()
-        return True
-
-    def complete_command(self, row: dict, *, run: bool = False) -> None:
-        """Put the row into the draft. Run it too when asked, unless it is one of this pane's
-        commands that needs its argument (`/btw`, `/bg`, `/name`): those wait for it."""
-        start = row.get("from")
-        if start is None:
-            text = row["insert"] + " "
-        else:
-            text = self.draft.text[:start] + row["insert"]
-        self.draft = Draft(text, len(text))
-        self.state.slash.cursor = 0
-        needs_argument = row.get("local") and "<" in row.get("label", "")
-        if run and not needs_argument:
-            self.submit(text)
-        elif self.surface:
-            self.surface.focus("dock.composer")
-
-    def pick_command(self, index: int) -> None:
-        """A click on a row of the command list completes it, ready for an argument."""
-        rows = slash_rows(self.state, self.draft.text)
-        if 0 <= index < len(rows):
-            self.complete_command(rows[index])
-            self.state.touch()
-
-    def ask_completions(self) -> None:
-        """Ask Hermes what completes the draft, once per draft, while a command is being typed."""
-        text = self.draft.text
-        if self.state.slash.put_away is not None and self.state.slash.put_away != text:
-            self.state.slash.put_away = None
-        if (
-            slash_typed(text) is None
-            or not self.backend
-            or not self.state.session_id
-            or not self.state.ready
-            or self.state.failed
-            or self.switching
-            or text in self.asked.values()
-            or self.state.slash.answered == text
-        ):
-            return
-        if self.completing is not None and self.completing in self.asked:
-            self.asked.pop(self.completing)  # a newer draft makes the older answer moot
-        self.completing = self.request("complete.slash", self.scoped(text=text))
-        self.asked[self.completing] = text
 
     def watch_key(self, item) -> bool:
         """The watched child owns the keyboard while it is open: a line to steer it, Enter to
@@ -1046,23 +639,6 @@ class App(Attachments):
             self.state.dispatch(f"steer-{result.get('subagent_id', '')}", "steered the child", detail[:120])
         else:
             self.state.add("notice", detail[:200] or "The child will not take that.")
-
-    def model_set(self, result: dict) -> None:
-        """Hermes answered a model switch: either it asks whether the expensive pick is worth it,
-        or it holds the pick for the next turn because this one is still running."""
-        if result.get("confirm_required"):
-            if self.state.sheet:
-                self.state.sheet.confirming = True
-            self.state.add(
-                "notice",
-                str(result.get("confirm_message") or "Hermes asks whether this model is worth it."),
-            )
-            return
-        self.state.close_sheet()
-        if result.get("deferred"):
-            self.state.dispatch("model", "model switches when this turn ends", str(result.get("value") or ""))
-        if result.get("warning"):
-            self.state.add("notice", str(result["warning"]))
 
     def suggest(self, text: str) -> None:
         self.draft = Draft(text, len(text))
@@ -1144,245 +720,6 @@ class App(Attachments):
         self.state.draft_images = ()
         self.send_message(message)
         self.save_drafts(force=True)
-
-    def run_command(self, text: str) -> None:
-        """One of COMMANDS, answered here; every other `/command` is Hermes's to run."""
-        name, space, rest = text.partition(" ")
-        if ALIASES.get(name.lower()):
-            text = ALIASES[name.lower()] + space + rest
-        local = {
-            "/reconnect": "reconnect",
-            "/recover": "restore",
-            "/queue-continue": "continue-queue",
-            "/queue-discard": "discard-queue",
-            "/find-next": "find-next",
-            "/find-previous": "find-previous",
-            "/find-close": "find-close",
-        }
-        if name == "/attach":
-            if rest.strip():
-                self.load_image(rest)
-            else:
-                self.attachment_action("image-path")
-        elif text == "/paste-image":
-            self.load_image()
-        elif text in local:
-            self.local_action(local[text])
-        elif name == "/find":
-            self.state.search_query = rest.strip()
-            self.state.search_index = 0
-            found = matches(self.state)
-            if found:
-                found[0].collapsed = False
-            self.state.touch()
-        elif name == "/export":
-            self.export_transcript(rest.strip())
-        elif self.switching and name not in ("/quit", "/exit", "/doctor", "/stop"):
-            self.state.add("notice", "Wait for the session switch before running this command.")
-        elif text in ("/quit", "/exit"):
-            self.exit = True
-        elif text == "/model":
-            self.model_event("open")
-        elif text.startswith("/model "):
-            self.switch_model(text[len("/model ") :].strip())
-        elif text == "/resume":
-            self.open_sessions()
-        elif text.startswith("/resume "):
-            self.resume_session(text[len("/resume ") :].strip())
-        elif text == "/name":
-            self.state.add("notice", "Name the session with /name <title>.")
-        elif text.startswith("/name "):
-            self.rename_session(text[len("/name ") :].strip())
-        elif text.startswith("/btw "):
-            self.side_question(text[len("/btw ") :].strip())
-        elif text.startswith("/bg "):
-            self.background_task(text[len("/bg ") :].strip())
-        elif text == "/exit":
-            self.exit = True
-        elif text == "/stop":
-            self.stop()
-            self.draft = Draft()
-        elif text == "/help":
-            self.hermes_command("/help")
-        elif text == "/clear":
-            self.state.clear()
-            self.state.add("notice", "Transcript cleared. Hermes still remembers this session.")
-        elif text == "/cost":
-            self.state.add("notice", self.state.cost())
-        elif text == "/doctor":
-            self.doctor()
-        else:
-            self.hermes_command(text)
-
-    def open_sessions(self) -> None:
-        """The sessions sheet, filled from Hermes's store as soon as it answers."""
-        if not self.state.session_id:
-            return
-        self.request("session.list", self.profiled(limit=SESSIONS))
-        self.state.open_sheet("sessions")
-
-    def resume_session(self, target: str) -> None:
-        """Pick up an earlier session in this pane: its transcript replaces this one, and this live
-        session is closed in Hermes once the other is open (its history stays in Hermes's store)."""
-        if not target or not self.state.session_id or self.switching:
-            return
-        if self.state.image_loading or self.state.draft_images:
-            self.state.add(
-                "notice", "Finish importing, then send or remove draft images before switching sessions."
-            )
-            return
-        if self.state.busy:
-            self.state.add("notice", "Finish or stop this turn before switching sessions.")
-            return
-        if target == self.state.stored_session_id:
-            self.state.close_sheet()
-            self.state.add("notice", "This is the session you are in.")
-            return
-        if self.state.queued and not all(message.destination == target for message in self.state.queued):
-            self.state.add(
-                "notice", "Continue or discard the current session's queue before switching sessions."
-            )
-            self.restoring = None
-            return
-        self.switching = target
-        self.state.switching = True
-        self.state.queue_paused = True
-        self.state.touch()
-        self.request("session.resume", self.profiled(session_id=target, cols=self.cols))
-
-    def hermes_command(self, text: str) -> None:
-        """Hand a slash command to Hermes, the way its own terminal does: `slash.exec` first, which
-        answers with output; it refers skills, bundles and commands that need the live session to
-        `command.dispatch` (see command_result). Hermes refuses what may not run mid-turn itself."""
-        if not self.backend or not self.state.session_id:
-            self.state.add("notice", f"{text.split(' ')[0]} needs Hermes, which is still starting.")
-            return
-        future = self.request("slash.exec", self.scoped(command=text[1:]))
-        self.asked[future] = text
-
-    def dispatch(self, text: str) -> None:
-        name, _, arg = text[1:].partition(" ")
-        future = self.request("command.dispatch", self.scoped(name=name.lower(), arg=arg.strip()))
-        self.asked[future] = text
-
-    def command_result(self, text: str, result: dict) -> None:
-        """What Hermes made of a slash command: output to show, a message to send, a draft to put
-        back in the composer, or another command it stands for."""
-        name, _, arg = text.partition(" ")
-        kind = result.get("type")
-        if kind == "alias" and result.get("target"):
-            self.run_command(f"/{result['target']}" + (f" {arg}" if arg else ""))
-        elif kind in ("skill", "send"):
-            if result.get("notice"):
-                self.state.add("notice", str(result["notice"]))
-            message = str(result.get("message") or "").strip()
-            if message:
-                self.send_command(message, str(result.get("display") or "").strip() or text)
-        elif kind == "prefill":
-            if result.get("notice"):
-                self.state.add("notice", str(result["notice"]))
-            message = str(result.get("message") or "")
-            self.draft = Draft(message, len(message))
-            self.state.touch()
-        else:
-            output = str(result.get("output") or "").strip("\n") or f"{name}: no output"
-            if result.get("warning"):
-                output = f"warning: {result['warning']}\n{output}"
-            if name == "/help":
-                output += "\n\n" + HELP
-            self.show_output(name, output)
-
-    def show_output(self, name: str, output: str) -> None:
-        """A short answer is a note; a long one folds into a row of its own, a few lines showing."""
-        lines = [line for line in output.splitlines() if line.strip()]
-        if len(output) <= NOTE_CHARS and len(lines) <= NOTE_LINES:
-            self.state.add("notice", output)
-        else:
-            self.state.add("command", output, name=name)
-
-    def send_command(self, message: str, shown: str) -> None:
-        """Send what a command expanded to, showing the command as it was typed rather than the
-        expansion, which is written for the model."""
-        if not self.state.ready or self.state.failed or self.switching:
-            self.state.add("notice", "Reconnect or finish switching sessions before sending this command.")
-            return
-        if self.state.held_message:
-            self.state.add("notice", "Restore or discard the retained message before sending this command.")
-            return
-        if self.state.busy:
-            self.state.add("notice", f"{shown.split(' ')[0]} can run when this turn ends.")
-            return
-        self.state.begin(shown)
-        self.state.last_prompt = message
-        self.state.last_message = Message(message)
-        self.request("prompt.submit", self.scoped(text=message))
-
-    def switch_failed(self) -> None:
-        self.switching = None
-        self.state.switching = False
-        self.state.queue_paused = True
-        if self.held_switch:
-            if any(message.images for message in self.held_switch):
-                self.state.add(
-                    "notice",
-                    "Session switch failed. Image messages remain paused for their destination; retry that switch or discard the queue.",
-                )
-                for message in self.held_switch:
-                    self.state.queue(message)
-            else:
-                self.state.add(
-                    "notice", "Session switch failed. Held messages were kept in your draft; none were sent."
-                )
-                text = "\n\n".join(
-                    [message.text for message in self.held_switch]
-                    + ([self.draft.text] if self.draft.text else [])
-                )
-                self.draft = Draft(text, len(text))
-            self.held_switch.clear()
-        self.restoring = None
-        self.state.touch()
-        self.save_drafts(force=True)
-
-    def export_transcript(self, destination: str) -> None:
-        path = Path(destination).expanduser() if destination else self.cwd / "hermes-conversation.md"
-        if not path.is_absolute():
-            path = self.cwd / path
-        try:
-            # Exclusive creation prevents accidental overwrite, including through symlinks.
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(markdown(self.state))
-            self.state.add("notice", f"Exported loaded conversation to {path}")
-        except OSError:
-            self.state.add(
-                "notice",
-                f"Could not export to {path}. Choose a new writable filename; existing files are never overwritten.",
-            )
-
-    def doctor(self) -> None:
-        from .diagnostics import diagnose
-
-        if any(method == "local.doctor" for method, _, _ in self.pending):
-            return
-        future = Future()
-
-        def check():
-            try:
-                future.set_result(diagnose(self.cwd, surface_caps=self.session.caps))
-            except Exception:
-                future.set_result(
-                    ["Doctor could not finish. Check the launcher settings and backend installation."]
-                )
-
-        worker = threading.Thread(target=check, daemon=True)
-        worker.start()
-        self._retired.append(worker)
-        self.pending.append(("local.doctor", future, time.monotonic() + 60))
-        self.state.add("notice", f"project: {self.cwd}")
-        self.state.add("notice", f"session: {self.state.session_id or 'none'}")
-        self.state.add(
-            "notice", "Checking launcher integrity and backend handshake (no agent session or prompt)."
-        )
 
     def choose_by_key(self, item) -> bool:
         """A pending question answers to the keyboard: digits pick, Enter takes the likely one,
