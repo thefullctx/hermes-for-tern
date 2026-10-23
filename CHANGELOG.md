@@ -2,11 +2,6 @@
 
 ## Unreleased
 
-### Maintenance
-
-- Split command handling, sheets, session switching, recovery and transcript components into
-  focused modules while preserving behavior and existing public imports.
-
 ## 0.1.0 — 2026-10-23
 
 ### Image attachments
@@ -67,3 +62,8 @@
   main, avoiding duplicate branch-push and PR checks.
 - Add regression coverage for failure, recovery, persistence, search/export and transport hangs.
 - Separate the quick-start README from feature and visual-design references; add a release checklist.
+
+### Maintenance
+
+- Split command handling, sheets, session switching, recovery and transcript components into
+  focused modules while preserving behavior and existing public imports.
