@@ -773,3 +773,64 @@ def test_malformed_read_only_acknowledgement_fails_only_its_request(monkeypatch)
             scenario,
         )
     )
+
+
+@pytest.mark.parametrize("kind", ["approval", "clarify"])
+def test_an_answer_settled_elsewhere_says_so_instead_of_vanishing_as_applied(kind):
+    prompt = {"prompt_id": "p", "execution_generation": 3, "choices": ["once", "deny"], "question": "Pick?"}
+    result = {"choice": "deny"} if kind == "approval" else {"answers": {"p": "no"}}
+    wire = Wire([{"status": "already_resolved", "prompt_id": "p"}])
+    adapter = Adapter(wire)
+    frame = adapter.event({"params": {"session_id": "s", "type": kind + ".request", "payload": prompt}})[0]
+    assert run(adapter.answer({"id": frame["id"], "result": result}))
+    assert not adapter.controls
+    [shown] = adapter.notices
+    noun = "approval" if kind == "approval" else "question"
+    assert shown["params"] == {
+        "session_id": "s",
+        "type": "notice",
+        "payload": {
+            "message": f"That {noun} was already answered in another window, so your answer wasn't applied."
+        },
+    }
+
+
+@pytest.mark.parametrize("reply", [{"status": "resolved", "prompt_id": "p"}, {}])
+def test_an_applied_answer_or_an_older_gateway_shows_no_note(reply):
+    adapter = Adapter(Wire([reply]))
+    prompt = {"prompt_id": "p", "execution_generation": 3, "choices": ["once", "deny"]}
+    frame = adapter.event({"params": {"session_id": "s", "type": "approval.request", "payload": prompt}})[0]
+    assert run(adapter.answer({"id": frame["id"], "result": {"choice": "once"}}))
+    assert not adapter.controls and adapter.notices == []
+
+
+@pytest.mark.parametrize("kind", ["approval", "clarify"])
+def test_the_bridge_shows_when_an_answer_was_settled_elsewhere_and_stays_connected(monkeypatch, kind):
+    async def scenario(socket, send, output, until):
+        await socket.incoming.put(
+            json.dumps(
+                {
+                    "method": "event",
+                    "params": {
+                        "session_id": "s",
+                        "type": kind + ".request",
+                        "payload": {"prompt_id": "p", "execution_generation": 3},
+                    },
+                }
+            )
+        )
+        await until(lambda: bool(output))
+        send({"id": output[0]["id"], "result": {"choice": "deny", "answers": {"p": "yes"}}})
+        await until(lambda: any(row.get("params", {}).get("type") == "notice" for row in output))
+        shown = next(row for row in output if row.get("params", {}).get("type") == "notice")
+        assert "already answered in another window" in shown["params"]["payload"]["message"]
+        assert not socket.closed and not any("local_error" in row for row in output)
+        send({"id": 2, "method": "client.capabilities"})
+        await until(lambda: any(row.get("id") == 2 for row in output))
+
+    def reply(frame):
+        if frame.get("method") == kind + ".respond":
+            return {"result": {"status": "already_resolved", "prompt_id": "p"}}
+        return {"result": {}}
+
+    run(bridge_scenario(monkeypatch, reply, scenario))

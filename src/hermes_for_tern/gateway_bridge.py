@@ -125,6 +125,8 @@ class Adapter:
         self.admissions: dict[str, dict] = {}
         self.controls: dict[str, tuple[str, str, dict]] = {}
         self.confirmations: dict[tuple[str, str], str] = {}
+        # Notes `answer` leaves for the bridge to show, since it returns only whether a card was ours.
+        self.notices: list[dict] = []
 
     async def scoped(self, method: str, params: dict) -> dict:
         profile = self.sessions.get(params.get("session_id"), {}).get("_profile")
@@ -199,8 +201,18 @@ class Adapter:
             params["choice"] = result.get("choice", "deny")
         else:
             params["answer"] = str((result.get("answers") or {}).get(required(prompt, "prompt_id"), ""))
-        await self.scoped(method + ".respond", params)
+        reply = await self.scoped(method + ".respond", params)
         self.controls.pop(frame["id"], None)
+        if isinstance(reply, dict) and reply.get("status") == "already_resolved":
+            # Another viewer settled it first. Hermes reports that as success, so without this the
+            # card would vanish as if this answer had been applied.
+            noun = "approval" if method == "approval" else "question"
+            self.notices.append(
+                notice(
+                    f"That {noun} was already answered in another window, so your answer wasn't applied.",
+                    sid,
+                )
+            )
         return True
 
     async def request(self, method: str, original: dict) -> dict:
@@ -392,6 +404,8 @@ async def serve(grant: dict) -> None:
                     if not await adapter.answer(frame):
                         progress.sent = True
                         await ws.send(json.dumps(frame))
+                    while adapter.notices:
+                        emit(adapter.notices.pop(0))
                     return
                 result = await adapter.request(frame["method"], frame.get("params") or {})
                 emit({"jsonrpc": "2.0", "id": rid, "result": result})
