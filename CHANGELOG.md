@@ -21,6 +21,8 @@
 
 ### Reliability and recovery
 
+- Say when an approval or question was already answered in another window. Hermes reports that
+  as success (`already_resolved`), so the card used to vanish as if your answer had been applied.
 - Keep the shared gateway connected after failed read-only queries, pre-send validation errors,
   refused approval/question answers and malformed updates. Preserve reconnect-and-review for
   uncertain mutations and event-history gaps; allow longer session-list and model-refresh queries.
