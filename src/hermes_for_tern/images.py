@@ -178,7 +178,7 @@ def clipboard_image(max_bytes: int) -> bytes:
     """Read only on an explicit paste action. Remote shells cannot read the client's clipboard."""
     if any(os.environ.get(key) for key in ("SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT")):
         raise ValueError(
-            "Image clipboard access is unavailable over SSH. Use Attach image with a local file path."
+            "Image clipboard access is unavailable over SSH. Use /attach <path> with a local file path."
         )
     with tempfile.TemporaryDirectory(prefix="hermes-image-") as directory:
         path = Path(directory) / "clipboard.png"
@@ -212,7 +212,7 @@ end run"""
                 ]
         if not commands:
             raise ValueError(
-                "Clipboard images need wl-paste (Wayland) or xclip (X11). Use Attach image instead."
+                "Clipboard images need wl-paste (Wayland) or xclip (X11). Use /attach <path> instead."
             )
         overall_deadline = time.monotonic() + 6
         for command, pipe in commands:
@@ -245,4 +245,4 @@ end run"""
                     return path.read_bytes()
             except OSError:
                 continue
-    raise ValueError("No readable PNG/JPEG image in the clipboard. Use Attach image to choose a file.")
+    raise ValueError("No readable PNG/JPEG image in the clipboard. Use /attach <path> to choose a file.")

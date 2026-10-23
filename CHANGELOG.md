@@ -4,6 +4,8 @@
 
 ### Image attachments
 
+- Remove the permanent Attach image / Paste image buttons and idle hint from the composer;
+  keep draft thumbnails and loading feedback, with images available through commands, paste and drop.
 - Open image previews with the original PNG/JPEG pixels instead of the small chat thumbnail,
   preserving detail when viewing at full size or zooming.
 - Recognize local image paths dropped or pasted into an empty composer before slash-command
