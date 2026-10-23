@@ -21,6 +21,9 @@
 
 ### Reliability and recovery
 
+- Keep the shared gateway connected after failed read-only queries, pre-send validation errors,
+  refused approval/question answers and malformed updates. Preserve reconnect-and-review for
+  uncertain mutations and event-history gaps; allow longer session-list and model-refresh queries.
 - Fix startup disconnects with newer Hermes when its shared gateway already owns the profile.
   Attach through the official bootstrap and authenticated WebSocket, translating session lifecycle,
   image admissions, Stop and pending controls. Closing Tern detaches its viewer without stopping

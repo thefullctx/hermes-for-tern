@@ -16,11 +16,59 @@ import sys
 import threading
 import time
 import uuid
+from contextvars import ContextVar
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .rpc import RpcError
 
 BOOTSTRAP = "ui-tui.scripts.gateway_bootstrap"
+CALL_TIMEOUT = 30
+SLOW_CALL_TIMEOUTS = {"session.list": 90, "model.options": 90}
+READ_ONLY_METHODS = frozenset(
+    {
+        "session.list",
+        "session.most_recent",
+        "model.options",
+        "complete.slash",
+        "complete.path",
+        "subagent.tail",
+        "client.capabilities",
+    }
+)
+
+
+class ReplayGap(RuntimeError):
+    pass
+
+
+@dataclass
+class RequestProgress:
+    sent: bool = False
+
+
+request_progress: ContextVar[RequestProgress | None] = ContextVar("request_progress", default=None)
+
+
+def required(data: dict, key: str):
+    value = data.get(key)
+    if value is None:
+        raise ValueError(f"Missing {key}")
+    return value
+
+
+def notice(message: str, sid=None) -> dict:
+    return {
+        "method": "event",
+        "params": {"session_id": sid, "type": "notice", "payload": {"message": message}},
+    }
+
+
+def cancel_control(rid, sid) -> dict:
+    return {
+        "method": "event",
+        "params": {"session_id": sid, "type": "request.cancel", "payload": {"id": rid}},
+    }
 
 
 def bootstrap(original: str) -> dict | None:
@@ -85,9 +133,20 @@ class Adapter:
         return await self.wire(method, params)
 
     def event(self, frame: dict) -> list[dict]:
+        if not isinstance(frame.get("params"), dict):
+            raise ValueError("Invalid event parameters")
         params = frame.get("params") or {}
         sid, kind = params.get("session_id"), params.get("type")
-        payload = params.get("payload") or {}
+        if kind == "session.replay_gap":
+            # Recovery must take a fresh snapshot; silently missing turn outcomes could replay work.
+            raise ReplayGap(
+                "Gateway event history changed. Reconnect to review the session; nothing will be resent."
+            )
+        payload = params.get("payload", {})
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid event payload")
         admission = params.get("admission_id") or payload.get("admission_id")
         own = self.admissions.get(sid)
         if kind == "message.complete":
@@ -103,14 +162,15 @@ class Adapter:
                     self.sessions[sid][key] = params.get(key, payload.get(key))
         if kind in ("approval.request", "clarify.request"):
             method = kind.split(".")[0]
-            rid = f"tern-control:{sid}:{payload['prompt_id']}"
+            rid = f"tern-control:{sid}:{required(payload, 'prompt_id')}"
+            required(payload, "execution_generation")
             self.controls[rid] = (method, sid, payload)
-            values = {**payload, "session_id": sid, "request_id": payload["prompt_id"]}
+            values = {**payload, "session_id": sid, "request_id": required(payload, "prompt_id")}
             if method == "clarify":
-                values["questions"] = [{**payload, "qid": payload["prompt_id"]}]
+                values["questions"] = [{**payload, "qid": required(payload, "prompt_id")}]
             return [{"jsonrpc": "2.0", "method": method, "id": rid, "params": values}]
         if kind in ("approval.settled", "clarify.settled"):
-            rid = f"tern-control:{sid}:{payload['prompt_id']}"
+            rid = f"tern-control:{sid}:{required(payload, 'prompt_id')}"
             self.controls.pop(rid, None)
             return [
                 {
@@ -118,11 +178,6 @@ class Adapter:
                     "params": {"session_id": sid, "type": "request.cancel", "payload": {"id": rid}},
                 }
             ]
-        if kind == "session.replay_gap":
-            # Recovery must take a fresh snapshot; silently missing turn outcomes could replay work.
-            raise RuntimeError(
-                "Gateway event history changed. Reconnect to review the session; nothing will be resent."
-            )
         return [frame]
 
     async def answer(self, frame: dict) -> bool:
@@ -137,13 +192,13 @@ class Adapter:
         result = frame.get("result") or {}
         params = {
             "session_id": sid,
-            "execution_generation": prompt["execution_generation"],
-            "prompt_id": prompt["prompt_id"],
+            "execution_generation": required(prompt, "execution_generation"),
+            "prompt_id": required(prompt, "prompt_id"),
         }
         if method == "approval":
             params["choice"] = result.get("choice", "deny")
         else:
-            params["answer"] = str((result.get("answers") or {}).get(prompt["prompt_id"], ""))
+            params["answer"] = str((result.get("answers") or {}).get(required(prompt, "prompt_id"), ""))
         await self.scoped(method + ".respond", params)
         self.controls.pop(frame["id"], None)
         return True
@@ -240,7 +295,7 @@ class Adapter:
                     raise ValueError("Uncertain turn execution; reconnect before stopping")
                 params["execution_generation"] = receipt["execution_generation"]
                 return await self.scoped(method, params)
-            params["execution_generation"] = self.sessions[sid]["execution_generation"]
+            params["execution_generation"] = required(self.sessions.get(sid, {}), "execution_generation")
         elif method == "session.title" or (method == "config.set" and params.get("key") == "model"):
             rename = method == "session.title"
             operation = "rename" if rename else "model"
@@ -253,7 +308,7 @@ class Adapter:
                 {
                     "session_id": sid,
                     "request_id": uuid.uuid4().hex,
-                    "expected_revision": self.sessions[sid]["revision"],
+                    "expected_revision": required(self.sessions.get(sid, {}), "revision"),
                     "operation": operation,
                     "payload": payload,
                 },
@@ -285,19 +340,57 @@ async def serve(grant: dict) -> None:
             rid = "tern-" + uuid.uuid4().hex
             future = pending[rid] = asyncio.get_running_loop().create_future()
             try:
-                await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
-                return await asyncio.wait_for(future, 30)
+                raw = json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+                # A send that raises may have written bytes already. Only failures before this
+                # point are certainly local; never retry a possibly delivered mutation.
+                progress = request_progress.get()
+                if progress is not None:
+                    progress.sent = True
+                await ws.send(raw)
+                timeout = CALL_TIMEOUT
+                if method == "session.list" or (method == "model.options" and params.get("refresh") is True):
+                    timeout = SLOW_CALL_TIMEOUTS[method]
+                return await asyncio.wait_for(future, timeout)
             finally:
                 pending.pop(rid, None)
 
         adapter = Adapter(call)
         tasks = set()
+        failure_reported = False
+
+        def report_disconnect(message):
+            nonlocal failure_reported
+            if not failure_reported:
+                failure_reported = True
+                emit({"local_error": message})
+
+        def deliver_event(frame):
+            try:
+                for event in adapter.event(frame):
+                    emit(event)
+            except ReplayGap:
+                raise
+            except (KeyError, ValueError, TypeError, AttributeError):
+                params = frame.get("params")
+                params = params if isinstance(params, dict) else {}
+                kind = params.get("type")
+                if kind in ("approval.request", "clarify.request"):
+                    message = (
+                        f"Hermes sent an unreadable {kind}; answer it in Hermes's own interface "
+                        "(hermes --plain) so the turn can continue."
+                    )
+                else:
+                    message = "Hermes sent an update this pane could not read; it was skipped."
+                emit(notice(message, params.get("session_id")))
 
         async def handle(frame):
             rid = frame.get("id")
+            progress = RequestProgress()
+            token = request_progress.set(progress)
             try:
                 if "method" not in frame:
                     if not await adapter.answer(frame):
+                        progress.sent = True
                         await ws.send(json.dumps(frame))
                     return
                 result = await adapter.request(frame["method"], frame.get("params") or {})
@@ -312,51 +405,90 @@ async def serve(grant: dict) -> None:
                             }
                         )
                     for prompt in result.get("prompts", []):
-                        for event in adapter.event(
+                        deliver_event(
                             {
                                 "method": "event",
                                 "params": {
                                     "session_id": sid,
-                                    "type": prompt["kind"] + ".request",
+                                    "type": prompt.get("kind", "unknown") + ".request",
                                     "payload": prompt,
                                 },
                             }
-                        ):
-                            emit(event)
+                        )
             except Exception as exc:
-                if "method" not in frame or not isinstance(exc, RpcError):
-                    emit(
-                        {
-                            "local_error": "Gateway operation was not confirmed. Reconnect and review; nothing was resent."
-                        }
+                definite = (
+                    isinstance(exc, RpcError) or not progress.sent or frame.get("method") in READ_ONLY_METHODS
+                )
+                if isinstance(exc, ReplayGap) or not definite:
+                    report_disconnect(
+                        str(exc)
+                        if isinstance(exc, ReplayGap)
+                        else "Gateway operation was not confirmed. Reconnect and review; nothing was resent."
                     )
                     await ws.close()
+                elif "method" not in frame:
+                    control = adapter.controls.pop(rid, None)
+                    if control:
+                        kind, sid, _ = control
+                        emit(cancel_control(rid, sid))
+                        emit(
+                            notice(
+                                f"That {kind} answer was refused or could not be sent. "
+                                "It may already have been answered elsewhere; check Hermes's own interface (hermes --plain).",
+                                sid,
+                            )
+                        )
                 else:
+                    method = frame["method"]
+                    code = -32000
+                    if isinstance(exc, TimeoutError):
+                        code, message = -32001, f"Hermes did not answer {method} in time"
+                    elif isinstance(exc, RpcError):
+                        code, message = exc.code, str(exc)
+                    else:
+                        reason = (
+                            str(exc)
+                            if isinstance(exc, (ValueError, KeyError))
+                            else "invalid or unavailable gateway response"
+                        )
+                        message = f"{method} failed: {reason}"
                     emit(
                         {
                             "jsonrpc": "2.0",
                             "id": rid,
                             "error": {
-                                "code": getattr(exc, "code", -32000),
-                                "message": str(exc),
+                                "code": code,
+                                "message": message,
                             },
                         }
                     )
+            finally:
+                request_progress.reset(token)
 
         async def receive():
             try:
                 async for raw in ws:
-                    frame = json.loads(raw)
+                    try:
+                        frame = json.loads(raw)
+                        if not isinstance(frame, dict):
+                            raise ValueError("Expected a frame object")
+                        hash(frame.get("id"))
+                    except (ValueError, TypeError):
+                        emit(notice("Hermes sent an update this pane could not read; it was skipped."))
+                        continue
                     future = pending.get(frame.get("id"))
                     if future is not None:
                         if not future.done():
-                            if "error" in frame:
+                            if isinstance(frame.get("error"), dict) and "result" not in frame:
                                 future.set_exception(RpcError(frame["error"]))
+                            elif isinstance(frame.get("result"), dict) and "error" not in frame:
+                                future.set_result(frame["result"])
                             else:
-                                future.set_result(frame.get("result", {}))
+                                future.set_exception(ValueError("Malformed gateway acknowledgement"))
                     elif "method" in frame:
-                        for event in adapter.event(frame):
-                            emit(event)
+                        deliver_event(frame)
+            except ReplayGap as exc:
+                report_disconnect(str(exc))
             finally:
                 for future in list(pending.values()):
                     if not future.done():
@@ -383,10 +515,8 @@ async def serve(grant: dict) -> None:
                 done, _ = await asyncio.wait((line_task, reader), return_when=asyncio.FIRST_COMPLETED)
                 if reader in done:
                     line_task.cancel()
-                    emit(
-                        {
-                            "local_error": "Hermes gateway disconnected. Reconnect to review; work was not resent."
-                        }
+                    report_disconnect(
+                        "Hermes gateway disconnected. Reconnect to review; work was not resent."
                     )
                     return
                 line = line_task.result()

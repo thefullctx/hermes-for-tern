@@ -427,3 +427,322 @@ def test_real_bridge_socket_transport_controls_and_shutdown_preserve_owner(tmp_p
                 {"session_id": "local-one", "execution_generation": 2, "prompt_id": "p", "choice": "deny"},
             ) in sent
             assert any(method == "session.detach" for method, _ in sent)
+
+
+class BridgeSocket:
+    subprotocol = "hermes-gateway-v1"
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.incoming = asyncio.Queue()
+        self.sent = []
+        self.closed = False
+        self.wait_limits = []
+
+    async def send(self, raw):
+        frame = json.loads(raw)
+        self.sent.append(frame)
+        result = self.reply(frame)
+        if result is not None:
+            await self.incoming.put(json.dumps({"id": frame["id"], **result}))
+
+    async def close(self):
+        self.closed = True
+        await self.incoming.put(None)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raw = await self.incoming.get()
+        if raw is None:
+            raise StopAsyncIteration
+        return raw
+
+
+async def bridge_scenario(monkeypatch, reply, scenario):
+    from contextlib import asynccontextmanager
+
+    from websockets.asyncio import client
+
+    socket = BridgeSocket(reply)
+    stdin = queue.Queue()
+    output = []
+
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        yield socket
+
+    wait_for = asyncio.wait_for
+
+    async def bounded_wait(future, timeout):
+        socket.wait_limits.append(timeout)
+        return await wait_for(future, min(timeout, 0.05))
+
+    monkeypatch.setattr(client, "connect", connect)
+    monkeypatch.setattr(gateway_bridge.sys, "stdin", SimpleNamespace(readline=stdin.get))
+    monkeypatch.setattr(gateway_bridge, "emit", output.append)
+    monkeypatch.setattr(gateway_bridge.asyncio, "wait_for", bounded_wait)
+    task = asyncio.create_task(gateway_bridge.serve({"url": "ws://fixture", "protocols": []}))
+
+    async def until(predicate):
+        async with asyncio.timeout(3):
+            while not predicate():
+                await asyncio.sleep(0.005)
+
+    def send(frame):
+        stdin.put(json.dumps(frame) + "\n")
+
+    try:
+        await scenario(socket, send, output, until)
+    finally:
+        stdin.put("")
+        async with asyncio.timeout(3):
+            await task
+
+
+def test_sent_prompt_timeout_disconnects_without_retry(monkeypatch):
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": "prompt.submit", "params": {"session_id": "s", "text": "once"}})
+        await until(lambda: socket.closed)
+        assert any("operation was not confirmed" in row.get("local_error", "") for row in output)
+        assert [frame["method"] for frame in socket.sent] == ["prompt.submit"]
+
+    run(bridge_scenario(monkeypatch, lambda frame: None, scenario))
+
+
+@pytest.mark.parametrize("method", sorted(gateway_bridge.READ_ONLY_METHODS))
+def test_read_only_timeout_fails_only_its_request_and_next_request_works(monkeypatch, method):
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": method})
+        await until(lambda: any(row.get("id") == 1 for row in output))
+        assert output[-1]["error"] == {
+            "code": -32001,
+            "message": f"Hermes did not answer {method} in time",
+        }
+        assert not socket.closed and not any("local_error" in row for row in output)
+        send({"id": 2, "method": "client.capabilities"})
+        await until(lambda: any(row.get("id") == 2 for row in output))
+        assert output[-1]["result"]["gateway_protocol"] == "hermes-gateway-v1"
+
+    count = 0
+
+    def reply(frame):
+        nonlocal count
+        count += 1
+        return None if count == 1 else {"result": {}}
+
+    run(bridge_scenario(monkeypatch, reply, scenario))
+
+
+def test_missing_revision_fails_before_send_even_during_another_inflight_request(monkeypatch):
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": "session.resume", "params": {"session_id": "s"}})
+        await until(lambda: any(row.get("id") == 1 for row in output))
+        send({"id": 2, "method": "session.list"})
+        await until(lambda: len(socket.sent) == 2)
+        send({"id": 3, "method": "session.title", "params": {"session_id": "s", "title": "new"}})
+        await until(lambda: any(row.get("id") == 3 for row in output))
+        error = next(row["error"] for row in output if row.get("id") == 3)
+        assert "Missing revision" in error["message"]
+        assert not socket.closed and not any("local_error" in row for row in output)
+        assert [frame["method"] for frame in socket.sent] == ["session.resume", "session.list"]
+
+    run(
+        bridge_scenario(
+            monkeypatch,
+            lambda f: {"result": {"session_id": "s"}} if f["method"] == "session.resume" else None,
+            scenario,
+        )
+    )
+
+
+@pytest.mark.parametrize("method", ["prompt.submit", "slash.exec", "command.dispatch", "image.attach_bytes"])
+@pytest.mark.parametrize("reply", [None, {"result": []}, {"result": None}])
+def test_uncertain_mutations_and_commands_disconnect_without_retry(monkeypatch, method, reply):
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": method, "params": {"session_id": "s"}})
+        await until(lambda: socket.closed)
+        assert len(socket.sent) == 1
+        assert len([row for row in output if "local_error" in row]) == 1
+        assert not any(row.get("id") == 1 and "result" in row for row in output)
+
+    run(bridge_scenario(monkeypatch, lambda frame: reply, scenario))
+
+
+@pytest.mark.parametrize("kind", ["approval", "clarify"])
+@pytest.mark.parametrize("refused", [True, False])
+def test_control_refusal_cancels_card_but_timeout_still_disconnects(monkeypatch, kind, refused):
+    async def scenario(socket, send, output, until):
+        await socket.incoming.put(
+            json.dumps(
+                {
+                    "method": "event",
+                    "params": {
+                        "session_id": "s",
+                        "type": kind + ".request",
+                        "payload": {"prompt_id": "p", "execution_generation": 3},
+                    },
+                }
+            )
+        )
+        await until(lambda: bool(output))
+        rid = output[0]["id"]
+        send({"id": rid, "result": {"choice": "deny", "answers": {"p": "yes"}}})
+        if not refused:
+            await until(lambda: socket.closed)
+            assert any("local_error" in row for row in output)
+            return
+        await until(lambda: any(row.get("params", {}).get("type") == "notice" for row in output))
+        cancel = next(row for row in output if row.get("params", {}).get("type") == "request.cancel")
+        assert cancel["params"]["payload"]["id"] == rid
+        assert not socket.closed and not any("local_error" in row for row in output)
+        # The refused control is removed; it cannot send another .respond call.
+        send({"id": rid, "result": {"choice": "deny"}})
+        await until(lambda: len(socket.sent) == 2)
+        assert socket.sent[1].get("method") is None
+        send({"id": 2, "method": "client.capabilities"})
+        await until(lambda: any(row.get("id") == 2 for row in output))
+
+    def reply(frame):
+        if frame.get("method") == kind + ".respond":
+            return {"error": {"code": 4001, "message": "already_settled"}} if refused else None
+        return {"result": {}}
+
+    run(bridge_scenario(monkeypatch, reply, scenario))
+
+
+def test_replay_gap_reports_its_specific_message_only(monkeypatch):
+    async def scenario(socket, send, output, until):
+        await socket.incoming.put(json.dumps({"method": "event", "params": {"type": "session.replay_gap"}}))
+        await until(lambda: any("local_error" in row for row in output))
+        assert output == [
+            {
+                "local_error": "Gateway event history changed. Reconnect to review the session; nothing will be resent."
+            }
+        ]
+
+    run(bridge_scenario(monkeypatch, lambda frame: {"result": {}}, scenario))
+
+
+def test_malformed_events_and_json_are_visible_and_do_not_stop_later_events(monkeypatch):
+    async def scenario(socket, send, output, until):
+        malformed = [
+            "not JSON",
+            "[]",
+            json.dumps({"method": "event", "params": []}),
+            json.dumps(
+                {"method": "event", "params": {"type": "approval.request", "session_id": "s", "payload": {}}}
+            ),
+            json.dumps(
+                {
+                    "method": "event",
+                    "params": {"type": "clarify.request", "session_id": "s", "payload": {"prompt_id": "p"}},
+                }
+            ),
+        ]
+        for raw in malformed:
+            await socket.incoming.put(raw)
+        event = {
+            "method": "event",
+            "params": {"type": "message.delta", "session_id": "s", "payload": {"text": "still connected"}},
+        }
+        await socket.incoming.put(json.dumps(event))
+        await until(lambda: event in output)
+        notices = [row for row in output if row.get("params", {}).get("type") == "notice"]
+        assert len(notices) == len(malformed)
+        assert all("hermes --plain" in row["params"]["payload"]["message"] for row in notices[-2:])
+        assert not socket.closed
+
+    run(bridge_scenario(monkeypatch, lambda frame: {"result": {}}, scenario))
+
+
+def test_read_only_key_error_fails_only_the_request(monkeypatch):
+    original = Adapter.request
+
+    async def request(self, method, params):
+        if method == "session.list":
+            raise KeyError("sessions")
+        return await original(self, method, params)
+
+    monkeypatch.setattr(Adapter, "request", request)
+
+    async def scenario(socket, send, output, until):
+        send({"id": 1, "method": "session.list"})
+        await until(lambda: bool(output))
+        assert "session.list failed" in output[0]["error"]["message"]
+        send({"id": 2, "method": "client.capabilities"})
+        await until(lambda: any(row.get("id") == 2 for row in output))
+        assert not socket.closed and not any("local_error" in row for row in output)
+
+    run(bridge_scenario(monkeypatch, lambda frame: {"result": {}}, scenario))
+
+
+def test_missing_answer_generation_is_rejected_before_calling_wire():
+    wire = Wire([])
+    adapter = Adapter(wire)
+    adapter.controls["control"] = ("approval", "s", {"prompt_id": "p"})
+    with pytest.raises(ValueError, match="Missing execution_generation"):
+        run(adapter.answer({"id": "control", "result": {"choice": "once"}}))
+    assert not wire.calls
+
+
+def test_real_socket_request_refusal_keeps_bridge_available(tmp_path):
+    from websockets.sync.server import serve
+
+    calls = []
+
+    def gateway(ws):
+        for raw in ws:
+            frame = json.loads(raw)
+            calls.append(frame["method"])
+            response = (
+                {"error": {"code": 4001, "message": "listing_unavailable"}}
+                if frame["method"] == "session.list"
+                else {"result": {"server_requests": ["approval", "clarify"]}}
+            )
+            ws.send(json.dumps({"id": frame["id"], **response}))
+
+    with serve(gateway, "127.0.0.1", 0, subprotocols=["hermes-gateway-v1"]) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        grant = {
+            "url": f"ws://127.0.0.1:{server.socket.getsockname()[1]}/api/ws",
+            "protocols": ["hermes-gateway-v1"],
+        }
+        original = tmp_path / "fake-hermes"
+        original.write_text(f"#!{sys.executable}\nprint({json.dumps(grant)!r})\n")
+        original.chmod(0o700)
+        backend = Backend(launcher.backend_command(str(original), {}), tmp_path)
+        try:
+            with pytest.raises(RpcError, match="listing_unavailable"):
+                backend.request("session.list", {}).result(timeout=5)
+            assert backend.request("client.capabilities", {}).result(timeout=5)["server_requests"] == [
+                "approval",
+                "clarify",
+            ]
+            assert backend.process.poll() is None
+            assert backend.events.empty()
+            assert calls == ["session.list", "client.capabilities"]
+        finally:
+            backend.close(None)
+            server.shutdown()
+            thread.join(timeout=3)
+
+
+def test_only_large_listing_and_explicit_model_refresh_get_longer_deadlines(monkeypatch):
+    async def scenario(socket, send, output, until):
+        requests = [
+            ("session.list", {}),
+            ("model.options", {"refresh": True}),
+            ("model.options", {}),
+            ("model.options", {"refresh": False}),
+            ("client.capabilities", {}),
+        ]
+        for rid, (method, params) in enumerate(requests, 1):
+            send({"id": rid, "method": method, "params": params})
+            await until(lambda: any(row.get("id") == rid for row in output))
+        assert gateway_bridge.CALL_TIMEOUT == 30
+        assert socket.wait_limits == [90, 90, 30, 30, 30]
+
+    run(bridge_scenario(monkeypatch, lambda frame: {"result": {}}, scenario))
