@@ -99,3 +99,19 @@ def test_doctor_accepts_same_environment_interpreter_alias_but_not_another_envir
     unrelated.symlink_to(interpreter)
     target.write_text(launcher.launcher_body().replace(str(interpreter), str(unrelated)))
     assert not launcher.launcher_matches(target)
+
+
+def test_native_connection_advertises_the_package_version(monkeypatch):
+    from hermes_for_tern import __version__
+
+    calls = []
+    monkeypatch.setattr(launcher, "settings", lambda: {})
+    monkeypatch.setattr(launcher, "original_command", lambda _: "/real/hermes")
+    monkeypatch.setattr(launcher.tern_sdk, "connect", lambda **params: calls.append(params))
+    monkeypatch.setattr(launcher, "passthrough", lambda *_: 0)
+    assert launcher.main([]) == 0
+    assert calls == [{"app": "hermes", "version": __version__, "features": ("edit", "undo", "send")}]
+    # Simulate the next release: a leftover literal must not keep advertising 0.1.0.
+    monkeypatch.setattr(launcher, "__version__", "9.8.7")
+    assert launcher.main([]) == 0
+    assert calls[-1]["version"] == "9.8.7"
