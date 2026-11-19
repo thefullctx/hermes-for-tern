@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.1 — 2026-11-19
+
+### Fixes
+
+- Fix model switching with current Hermes Agent: send the execution generation that Hermes now
+  requires for model changes, so switching no longer fails with `invalid_params` (#34).
+- Fix image paste on macOS: the clipboard script used the reserved AppleScript word `picture`
+  and never ran, so every paste reported no readable image (#33). A test now compiles the real
+  script on macOS.
+
+Thanks to @ebreen for reporting both and proposing the fixes.
+
 ## 0.1.0 — 2026-10-23
 
 ### Image attachments
