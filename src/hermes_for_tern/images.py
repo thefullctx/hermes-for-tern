@@ -174,6 +174,22 @@ class ImageStore:
                     path.unlink(missing_ok=True)
 
 
+# `picture` is a reserved AppleScript class name, so the variable must not use it.
+MAC_CLIPBOARD_SCRIPT = """on run argv
+set destination to POSIX file (item 1 of argv)
+set imageData to the clipboard as «class PNGf»
+set handle to open for access destination with write permission
+try
+set eof handle to 0
+write imageData to handle
+close access handle
+on error problem
+close access handle
+error problem
+end try
+end run"""
+
+
 def clipboard_image(max_bytes: int) -> bytes:
     """Read only on an explicit paste action. Remote shells cannot read the client's clipboard."""
     if any(os.environ.get(key) for key in ("SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT")):
@@ -184,19 +200,7 @@ def clipboard_image(max_bytes: int) -> bytes:
         path = Path(directory) / "clipboard.png"
         path.touch(mode=0o600)
         if sys.platform == "darwin":
-            script = """on run argv
-set destination to POSIX file (item 1 of argv)
-set picture to the clipboard as «class PNGf»
-set handle to open for access destination with write permission
-try
-set eof handle to 0
-write picture to handle
-close access handle
-on error problem
-close access handle
-error problem
-end try
-end run"""
+            script = MAC_CLIPBOARD_SCRIPT
             commands = [(["osascript", "-e", script, str(path)], False)]
         else:
             commands = []

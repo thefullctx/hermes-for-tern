@@ -247,7 +247,9 @@ def test_an_unrelated_view_does_not_approve_or_deny_another_sessions_card():
 
 
 def test_interrupt_uses_current_execution_stamp_and_model_confirmation_uses_owner_token():
-    wire = Wire([SNAPSHOT, {}, {"confirm_required": True, "confirm": "owner-token"}, {"revision": 5}])
+    wire = Wire(
+        [SNAPSHOT, {}, {"confirm_required": True, "confirm": "owner-token"}, {"revision": 5}, {"revision": 6}]
+    )
     adapter = Adapter(wire)
     run(adapter.request("session.create", {}))
     adapter.event(
@@ -271,7 +273,12 @@ def test_interrupt_uses_current_execution_stamp_and_model_confirmation_uses_owne
     )
     assert wire.calls[-1][0] == "session.mutate"
     assert wire.calls[-1][1]["expected_revision"] == 4
+    assert wire.calls[-1][1]["expected_generation"] == 7
     assert wire.calls[-1][1]["payload"] == {"model": "model-a", "confirm": "owner-token"}
+    run(adapter.request("session.title", {"session_id": "local-one", "title": "Renamed"}))
+    assert wire.calls[-1][1]["operation"] == "rename"
+    assert wire.calls[-1][1]["expected_revision"] == 5
+    assert "expected_generation" not in wire.calls[-1][1]
 
 
 def test_bootstrap_grant_stays_private_and_legacy_fallback_is_only_for_missing_helper(monkeypatch):
