@@ -315,12 +315,17 @@ class Adapter:
             token = self.confirmations.get((sid, params.get("value")))
             if params.get("confirm_expensive_model") and token:
                 payload["confirm"] = token
+            session = self.sessions.get(sid, {})
+            fence = {"expected_revision": required(session, "revision")}
+            if not rename:
+                # Hermes fences policy operations such as a model switch on the execution generation.
+                fence["expected_generation"] = required(session, "execution_generation")
             result = await self.scoped(
                 "session.mutate",
                 {
                     "session_id": sid,
                     "request_id": uuid.uuid4().hex,
-                    "expected_revision": required(self.sessions.get(sid, {}), "revision"),
+                    **fence,
                     "operation": operation,
                     "payload": payload,
                 },

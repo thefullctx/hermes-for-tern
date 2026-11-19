@@ -2,6 +2,8 @@ import base64
 import io
 import json
 import os
+import shutil
+import subprocess
 import time
 
 import pytest
@@ -10,7 +12,13 @@ from tern_sdk import Key
 
 from hermes_for_tern.delivery import ImageDelivery
 from hermes_for_tern.editor import Draft
-from hermes_for_tern.images import RETENTION, ImageStore, clipboard_image, dropped_image_path
+from hermes_for_tern.images import (
+    MAC_CLIPBOARD_SCRIPT,
+    RETENTION,
+    ImageStore,
+    clipboard_image,
+    dropped_image_path,
+)
 from hermes_for_tern.messages import ImageRef, Message
 from hermes_for_tern.recovery import RecoveryStore
 from test_app import FakeBackend, app
@@ -158,6 +166,17 @@ def test_configuration_and_remote_clipboard_fail_with_actionable_errors(monkeypa
     monkeypatch.setenv("SSH_CONNECTION", "remote")
     with pytest.raises(ValueError, match="SSH.*/attach"):
         clipboard_image(100)
+
+
+@pytest.mark.skipif(not shutil.which("osacompile"), reason="needs macOS osacompile")
+def test_macos_clipboard_script_compiles(tmp_path):
+    # The clipboard tests stub the reader, so compile the real AppleScript to catch syntax errors.
+    result = subprocess.run(
+        ["osacompile", "-o", str(tmp_path / "clipboard.scpt"), "-e", MAC_CLIPBOARD_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_linux_clipboard_helper_reads_bytes_and_rejects_oversize(tmp_path, monkeypatch):
